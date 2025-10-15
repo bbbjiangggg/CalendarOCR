@@ -1,23 +1,70 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
+import { Image } from 'react-native';
 
-// Google Cloud Vision API Key
-const GOOGLE_CLOUD_VISION_API_KEY = 'AIzaSyBJyCyQrxafa5RHv5nlm-BCdUsqN-Gcrtg';
+// Backend API URL - Your Vercel deployment
+const BACKEND_API_URL = 'https://calendar-ocr-backend.vercel.app/api/ocr';
+
+// Focus frame coordinates matching the camera UI
+// These match the focusArea in CameraScreen.js (top:20%, left:10%, right:10%, bottom:30%)
+const FOCUS_FRAME = {
+  top: 0.20,      // 20% from top
+  left: 0.10,     // 10% from left
+  width: 0.80,    // 80% of screen width (100% - 10% - 10%)
+  height: 0.50    // 50% of screen height (100% - 20% - 30%)
+};
+
+/**
+ * Get image dimensions
+ */
+const getImageDimensions = (uri) => {
+  return new Promise((resolve, reject) => {
+    Image.getSize(
+      uri,
+      (width, height) => resolve({ width, height }),
+      (error) => reject(error)
+    );
+  });
+};
 
 /**
  * Preprocess image for better OCR accuracy
+ * - Crop to focus frame area (removes surrounding posters)
  * - Resize to optimal dimensions
- * - Enhance contrast
+ * - Compress for faster upload
  */
 const preprocessImage = async (imageUri) => {
   try {
-    console.log('OCR: Preprocessing image...');
+    console.log('OCR: ===== STARTING IMAGE PREPROCESSING =====');
+    console.log('OCR: Input image URI:', imageUri);
 
-    // Resize and optimize image for OCR
+    // Get original image dimensions
+    console.log('OCR: Fetching image dimensions...');
+    const { width: imageWidth, height: imageHeight } = await getImageDimensions(imageUri);
+    console.log(`OCR: ✓ Original image dimensions: ${imageWidth}×${imageHeight} (aspect ratio: ${(imageWidth/imageHeight).toFixed(2)})`);
+
+    // Calculate crop region based on focus frame
+    const cropRegion = {
+      originX: Math.round(imageWidth * FOCUS_FRAME.left),
+      originY: Math.round(imageHeight * FOCUS_FRAME.top),
+      width: Math.round(imageWidth * FOCUS_FRAME.width),
+      height: Math.round(imageHeight * FOCUS_FRAME.height)
+    };
+
+    console.log('OCR: Focus frame settings:', FOCUS_FRAME);
+    console.log(`OCR: ✓ Calculated crop region:`, cropRegion);
+    console.log(`OCR:   - Cropping from (${cropRegion.originX}, ${cropRegion.originY})`);
+    console.log(`OCR:   - New size: ${cropRegion.width}×${cropRegion.height}`);
+    console.log(`OCR:   - This removes ${((1 - FOCUS_FRAME.width * FOCUS_FRAME.height) * 100).toFixed(1)}% of the image`);
+
+    // Apply crop and resize operations
+    console.log('OCR: Applying crop and resize...');
     const manipulatedImage = await ImageManipulator.manipulateAsync(
       imageUri,
       [
-        // Resize to max 1600px width to reduce API payload size
+        // Step 1: Crop to focus frame area (removes surrounding content)
+        { crop: cropRegion },
+        // Step 2: Resize to max 1600px width to reduce API payload size
         { resize: { width: 1600 } }
       ],
       {
@@ -26,12 +73,37 @@ const preprocessImage = async (imageUri) => {
       }
     );
 
-    console.log('OCR: Image preprocessed successfully');
+    console.log('OCR: ✓ Image preprocessed successfully!');
+    console.log(`OCR:   - Cropped image URI: ${manipulatedImage.uri}`);
+    console.log(`OCR:   - Final dimensions: ${manipulatedImage.width}×${manipulatedImage.height}`);
+    console.log('OCR: ===== PREPROCESSING COMPLETE =====');
+
     return manipulatedImage.uri;
   } catch (error) {
-    console.error('OCR: Image preprocessing failed, using original:', error);
-    // Return original URI if preprocessing fails
-    return imageUri;
+    console.error('OCR: ✗ Image preprocessing FAILED:', error);
+    console.error('OCR: Error name:', error.name);
+    console.error('OCR: Error message:', error.message);
+    console.error('OCR: Error stack:', error.stack);
+    console.warn('OCR: ⚠️  FALLBACK: Attempting without cropping...');
+
+    // Fallback: Try without cropping
+    try {
+      const fallbackImage = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [{ resize: { width: 1600 } }],
+        {
+          compress: 0.7,
+          format: ImageManipulator.SaveFormat.JPEG,
+        }
+      );
+      console.log('OCR: ✓ Fallback preprocessing successful (resize only - NO CROPPING APPLIED)');
+      console.warn('OCR: ⚠️  WARNING: Full image sent to OCR, may see other posters!');
+      return fallbackImage.uri;
+    } catch (fallbackError) {
+      console.error('OCR: ✗ Fallback preprocessing also failed:', fallbackError);
+      console.error('OCR: Using original image without any processing');
+      return imageUri;
+    }
   }
 };
 
@@ -47,9 +119,9 @@ export const extractTextFromImage = async (imageUri) => {
       throw new Error('Invalid image URI provided');
     }
 
-    // Check if API key is configured
-    if (!GOOGLE_CLOUD_VISION_API_KEY || GOOGLE_CLOUD_VISION_API_KEY === 'YOUR_API_KEY_HERE') {
-      throw new Error('Google Cloud Vision API key not configured');
+    // Check if backend URL is configured
+    if (!BACKEND_API_URL || BACKEND_API_URL === 'YOUR_VERCEL_URL_HERE/api/ocr') {
+      throw new Error('Backend API URL not configured. Please deploy the backend and update BACKEND_API_URL in ocrService.js');
     }
 
     // Preprocess image for better OCR results
@@ -61,52 +133,46 @@ export const extractTextFromImage = async (imageUri) => {
       encoding: FileSystem.EncodingType.Base64,
     });
 
-    // Call Google Cloud Vision API
-    console.log('OCR: Calling Google Cloud Vision API...');
-    const response = await fetch(
-      `https://vision.googleapis.com/v1/images:annotate?key=${GOOGLE_CLOUD_VISION_API_KEY}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          requests: [
-            {
-              image: {
-                content: base64Image,
-              },
-              features: [
-                {
-                  type: 'TEXT_DETECTION',
-                  maxResults: 1,
-                },
-              ],
-            },
-          ],
-        }),
-      }
-    );
+    // Call backend API
+    console.log('OCR: Calling backend API...');
+    const response = await fetch(BACKEND_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        image: base64Image,
+      }),
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('OCR: API error response:', errorText);
-      throw new Error(`API request failed: ${response.status}`);
+      console.error('OCR: Backend API error:', response.status, errorText);
+      throw new Error(`Backend API request failed: ${response.status}`);
     }
 
     const result = await response.json();
-    console.log('OCR: API response received');
+    console.log('OCR: ✓ Backend response received');
 
-    // Extract text from response
-    if (result.responses && result.responses[0] && result.responses[0].textAnnotations) {
-      const extractedText = result.responses[0].textAnnotations[0].description;
-      console.log('OCR: Text extraction completed successfully');
-      console.log('OCR: Detected text:', extractedText);
+    // Extract text from backend response
+    if (result.success && result.text !== undefined) {
+      const extractedText = result.text;
+
+      if (extractedText) {
+        console.log('OCR: ✓ Text extraction completed successfully');
+        console.log('OCR: ===== EXTRACTED TEXT START =====');
+        console.log(extractedText);
+        console.log('OCR: ===== EXTRACTED TEXT END =====');
+        console.log(`OCR: Total characters: ${extractedText.length}, Total lines: ${extractedText.split('\n').length}`);
+      } else {
+        console.warn('OCR: ⚠️  No text detected in image');
+      }
+
       return extractedText;
     }
 
-    console.warn('OCR: No text detected in image');
-    throw new Error('No text detected in image');
+    console.warn('OCR: Invalid response format from backend');
+    throw new Error('Invalid response from backend');
   } catch (error) {
     console.error('OCR Error details:', error);
     console.error('OCR Error message:', error.message);
@@ -120,22 +186,27 @@ export const extractTextFromImage = async (imageUri) => {
 
 export const parseEventDetails = (text) => {
   try {
+    console.log('===== STARTING EVENT PARSING =====');
     console.log('Parsing text:', text);
-    
+
     // Validate input
     if (!text || typeof text !== 'string') {
       console.warn('Invalid text input for parsing');
       return createFallbackEvent();
     }
-    
+
     const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-    console.log('Text lines:', lines);
-    
+    console.log(`Found ${lines.length} text lines:`, lines);
+
     // Look for multiple date patterns to identify multiple events
     const events = [];
     const dateMatches = findAllDates(text);
-    console.log('Found dates:', dateMatches);
-    
+    console.log(`Found ${dateMatches.length} date(s):`, dateMatches.map(d => ({
+      date: d.date.toLocaleString(),
+      hasTime: d.hasTime,
+      originalText: d.originalText
+    })));
+
     if (dateMatches.length === 0) {
       // No dates found, create single event with manual entry
       console.log('No dates found, creating default event');
@@ -147,14 +218,18 @@ export const parseEventDetails = (text) => {
         notification: '1hr'
       }];
     }
-    
+
     // For each date found, try to create an event
     dateMatches.forEach((dateMatch, index) => {
       if (!dateMatch || !dateMatch.date) {
         console.warn('Invalid date match found:', dateMatch);
         return;
       }
-      
+
+      console.log(`\nProcessing event ${index + 1}:`);
+      console.log(`  Date: ${dateMatch.date.toLocaleString()}`);
+      console.log(`  Has time: ${dateMatch.hasTime}`);
+
       const eventDetails = {
         title: '',
         date: dateMatch.date,
@@ -162,21 +237,30 @@ export const parseEventDetails = (text) => {
         description: '',
         notification: '1hr'
       };
-      
+
       // Try to find title near this date
       const titleCandidate = findTitleNearDate(lines, dateMatch.originalText);
       if (titleCandidate) {
         eventDetails.title = titleCandidate;
+        console.log(`  Title (found): "${titleCandidate}"`);
       } else if (lines.length > 0) {
         eventDetails.title = lines[0]; // Fallback to first line
+        console.log(`  Title (fallback): "${lines[0]}"`);
       } else {
         eventDetails.title = 'New Event';
+        console.log(`  Title (default): "New Event"`);
       }
-      
+
       events.push(eventDetails);
     });
-    
-    console.log('Created events:', events);
+
+    console.log('\n===== EVENT PARSING COMPLETE =====');
+    console.log(`Created ${events.length} event(s):`, events.map(e => ({
+      title: e.title,
+      date: e.date.toLocaleString(),
+      time: `${e.date.getHours()}:${String(e.date.getMinutes()).padStart(2, '0')}`
+    })));
+
     return events.length > 0 ? events : createFallbackEvent();
   } catch (error) {
     console.error('Error parsing event details:', error);
@@ -200,26 +284,40 @@ const createFallbackEvent = () => {
 const findTimesNearDate = (text, datePosition) => {
   const timePatterns = [
     // 12-hour format: 7:00 PM, 7PM, 7:00pm
-    /(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi,
-    // 24-hour format: 19:00, 1900
-    /(\d{1,2}):(\d{2})/g,
+    { pattern: /(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi, name: '12-hour' },
+    // 24-hour format: 19:00, 1900 (only match if NOT followed by AM/PM)
+    { pattern: /(\d{1,2}):(\d{2})(?!\s*(?:am|pm|a\.m\.|p\.m\.))/gi, name: '24-hour' },
   ];
 
   let closestTime = null;
   let closestDistance = Infinity;
+  let closestMatch = null;
 
-  timePatterns.forEach(pattern => {
+  timePatterns.forEach(({ pattern, name }) => {
     let match;
     while ((match = pattern.exec(text)) !== null) {
       const distance = Math.abs(match.index - datePosition);
 
+      console.log(`Time parsing: Found ${name} match "${match[0]}" at position ${match.index}, distance from date: ${distance}`);
+
       // Look for times within 200 characters of the date
       if (distance < 200 && distance < closestDistance) {
-        closestDistance = distance;
-        closestTime = parseTime(match);
+        const parsedTime = parseTime(match, name);
+        if (parsedTime) {
+          console.log(`Time parsing: Parsed as ${parsedTime.hours}:${String(parsedTime.minutes).padStart(2, '0')} (${parsedTime.hours >= 12 ? 'PM' : 'AM'})`);
+          closestDistance = distance;
+          closestTime = parsedTime;
+          closestMatch = match[0];
+        }
       }
     }
   });
+
+  if (closestTime) {
+    console.log(`Time parsing: Selected closest time "${closestMatch}": ${closestTime.hours}:${String(closestTime.minutes).padStart(2, '0')}`);
+  } else {
+    console.log('Time parsing: No time found near date');
+  }
 
   return closestTime;
 };
@@ -227,27 +325,36 @@ const findTimesNearDate = (text, datePosition) => {
 /**
  * Parse time from regex match
  */
-const parseTime = (match) => {
+const parseTime = (match, patternName) => {
   try {
     let hours = parseInt(match[1]);
     const minutes = match[2] ? parseInt(match[2]) : 0;
     const meridiem = match[3] ? match[3].toLowerCase() : null;
 
+    console.log(`Time parsing [${patternName}]: Raw match - hours:${hours}, minutes:${minutes}, meridiem:${meridiem || 'none'}`);
+
     if (meridiem) {
       // 12-hour format
+      const originalHours = hours;
       if (meridiem.startsWith('p') && hours !== 12) {
         hours += 12;
+        console.log(`Time parsing: Converting ${originalHours}PM to ${hours} (24-hour)`);
       } else if (meridiem.startsWith('a') && hours === 12) {
         hours = 0;
+        console.log(`Time parsing: Converting 12AM to 0 (24-hour)`);
+      } else {
+        console.log(`Time parsing: Keeping ${hours} (already correct for ${meridiem.toUpperCase()})`);
       }
     }
 
     // Validate time
     if (hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60) {
       return { hours, minutes };
+    } else {
+      console.warn(`Time parsing: Invalid time - hours:${hours}, minutes:${minutes}`);
     }
   } catch (error) {
-    console.log('Error parsing time:', error);
+    console.error('Time parsing error:', error);
   }
 
   return null;
