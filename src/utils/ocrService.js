@@ -2,8 +2,9 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
 import { Image } from 'react-native';
 
-// Backend API URL - Your Vercel deployment
+// Backend API URLs - Your Vercel deployment
 const BACKEND_API_URL = 'https://calendar-ocr-backend.vercel.app/api/ocr';
+const PARSE_EVENT_API_URL = 'https://calendar-ocr-backend.vercel.app/api/parse-event';
 
 // Focus frame coordinates matching the camera UI
 // These match the focusArea in CameraScreen.js (top:20%, left:10%, right:10%, bottom:30%)
@@ -108,7 +109,7 @@ const preprocessImage = async (imageUri) => {
 };
 
 /**
- * Extract text from image using Google Cloud Vision API
+ * Extract text from image using Vision API
  */
 export const extractTextFromImage = async (imageUri) => {
   try {
@@ -184,6 +185,152 @@ export const extractTextFromImage = async (imageUri) => {
   }
 };
 
+/**
+ * Extract text from image and parse it into structured event data using GPT-4o-mini
+ * This is the new AI-powered pipeline that replaces regex-based parsing
+ */
+export const extractAndParseEvent = async (imageUri) => {
+  try {
+    console.log('===== STARTING GPT-POWERED EVENT EXTRACTION =====');
+    console.log('GPT Pipeline: Processing image:', imageUri);
+
+    // Step 1: Extract raw text using Vision API
+    console.log('GPT Pipeline: Step 1 - Extracting text via Vision API...');
+    const rawText = await extractTextFromImage(imageUri);
+
+    if (!rawText || rawText.trim().length === 0) {
+      console.warn('GPT Pipeline: No text extracted from image, creating fallback event');
+      return createFallbackEvent();
+    }
+
+    console.log('GPT Pipeline: ✓ Text extraction successful');
+    console.log(`GPT Pipeline: Extracted ${rawText.length} characters of text`);
+
+    // Step 2: Parse event details using GPT-4o-mini
+    try {
+      console.log('GPT Pipeline: Step 2 - Calling GPT-4o-mini for structured parsing...');
+
+      const response = await fetch(PARSE_EVENT_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          text: rawText
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('GPT Pipeline: Backend API error:', response.status, errorText);
+        throw new Error(`GPT parsing API failed: ${response.status}`);
+      }
+
+      const result = await response.json();
+      console.log('GPT Pipeline: ✓ GPT parsing response received');
+
+      if (result.success && result.event) {
+        console.log('GPT Pipeline: ✓ Successfully parsed event details');
+        console.log('GPT Pipeline: Event data:', {
+          title: result.event.title,
+          date: result.event.date,
+          time: result.event.time,
+          endTime: result.event.endTime || result.event.end_time || '(empty)',
+          location: result.event.location ? `"${result.event.location}"` : '(empty)',
+          description: result.event.description ? `"${result.event.description.substring(0, 50)}..."` : '(empty)',
+          duration: result.event.duration || '(empty)'
+        });
+
+        // Step 3: Convert GPT response (ISO date/time strings) to JavaScript Date object
+        console.log('GPT Pipeline: Step 3 - Converting ISO date/time to Date object...');
+
+        // Combine date and time: "2024-12-25" + "14:30" -> "2024-12-25T14:30"
+        const dateTimeString = `${result.event.date}T${result.event.time}`;
+        const eventDate = new Date(dateTimeString);
+
+        // Validate the date
+        if (isNaN(eventDate.getTime())) {
+          console.error('GPT Pipeline: Invalid date/time from GPT:', dateTimeString);
+          throw new Error('Invalid date/time format from GPT');
+        }
+
+        console.log('GPT Pipeline: ✓ Date conversion successful:', eventDate.toLocaleString());
+
+        // Step 4: Calculate duration from start and end time if available
+        let calculatedDuration = result.event.duration || '60'; // Default to 60 minutes
+
+        const endTime = result.event.endTime || result.event.end_time;
+        if (endTime && !result.event.duration) {
+          console.log('GPT Pipeline: End time detected, calculating duration...');
+          try {
+            // Parse start time (HH:MM format)
+            const [startHour, startMinute] = result.event.time.split(':').map(Number);
+            // Parse end time (HH:MM format)
+            const [endHour, endMinute] = endTime.split(':').map(Number);
+
+            // Calculate total minutes from midnight for both times
+            const startTotalMinutes = startHour * 60 + startMinute;
+            const endTotalMinutes = endHour * 60 + endMinute;
+
+            // Calculate duration in minutes
+            let durationMinutes = endTotalMinutes - startTotalMinutes;
+
+            // Handle cases where event crosses midnight (end time is next day)
+            if (durationMinutes < 0) {
+              durationMinutes += 24 * 60; // Add 24 hours
+            }
+
+            // Validate reasonable duration (between 5 minutes and 24 hours)
+            if (durationMinutes >= 5 && durationMinutes <= 1440) {
+              calculatedDuration = String(durationMinutes);
+              console.log(`GPT Pipeline: ✓ Calculated duration: ${durationMinutes} minutes (${result.event.time} to ${endTime})`);
+            } else {
+              console.warn(`GPT Pipeline: Calculated duration ${durationMinutes} min seems unreasonable, using default`);
+            }
+          } catch (error) {
+            console.error('GPT Pipeline: Error calculating duration:', error);
+            console.log('GPT Pipeline: Using default duration');
+          }
+        }
+
+        // Step 5: Create event object
+        const parsedEvent = {
+          title: result.event.title,
+          date: eventDate,
+          location: result.event.location || '',
+          description: result.event.description || '',
+          duration: calculatedDuration,
+          notification: '1hr'
+        };
+
+        console.log('GPT Pipeline: ===== GPT PARSING COMPLETE - SUCCESS =====');
+        console.log(`GPT Pipeline: Final duration: ${calculatedDuration} minutes`);
+        return [parsedEvent]; // Return array for consistency with parseEventDetails
+
+      } else {
+        console.error('GPT Pipeline: Invalid response format from GPT API:', result);
+        throw new Error('Invalid response from GPT parsing API');
+      }
+
+    } catch (gptError) {
+      console.error('GPT Pipeline: ✗ GPT parsing failed:', gptError.message);
+      console.error('GPT Pipeline: Full error:', gptError);
+      console.log('GPT Pipeline: ⚠️  FALLBACK: Using regex-based parsing instead...');
+
+      // Fallback to regex-based parsing if GPT fails
+      const regexResult = parseEventDetails(rawText);
+      console.log('GPT Pipeline: Regex parsing fallback completed');
+      return regexResult;
+    }
+
+  } catch (error) {
+    console.error('GPT Pipeline: ✗ Critical error in extractAndParseEvent:', error);
+    console.error('GPT Pipeline: Error message:', error.message);
+    console.log('GPT Pipeline: Returning fallback event');
+    return createFallbackEvent();
+  }
+};
+
 export const parseEventDetails = (text) => {
   try {
     console.log('===== STARTING EVENT PARSING =====');
@@ -210,11 +357,13 @@ export const parseEventDetails = (text) => {
     if (dateMatches.length === 0) {
       // No dates found, create single event with manual entry
       console.log('No dates found, creating default event');
+      const duration = findDurationInText(text, null); // No start time available
       return [{
         title: lines.length > 0 ? lines[0] : 'New Event',
         date: new Date(),
         location: '',
         description: lines.slice(1).join(' '),
+        duration: duration,
         notification: '1hr'
       }];
     }
@@ -230,11 +379,24 @@ export const parseEventDetails = (text) => {
       console.log(`  Date: ${dateMatch.date.toLocaleString()}`);
       console.log(`  Has time: ${dateMatch.hasTime}`);
 
+      // Extract start time from the date if available
+      let startTime = null;
+      if (dateMatch.hasTime) {
+        startTime = {
+          hours: dateMatch.date.getHours(),
+          minutes: dateMatch.date.getMinutes()
+        };
+      }
+
+      // Calculate duration (pass startTime for smart duration calculation from time ranges)
+      const duration = findDurationInText(text, startTime);
+
       const eventDetails = {
         title: '',
         date: dateMatch.date,
         location: '',
         description: '',
+        duration: duration,
         notification: '1hr'
       };
 
@@ -274,8 +436,131 @@ const createFallbackEvent = () => {
     date: new Date(),
     location: '',
     description: '',
+    duration: '60',
     notification: '1hr'
   }];
+};
+
+/**
+ * Extract duration from text - either explicit duration or calculated from time range
+ */
+const findDurationInText = (text, startTime) => {
+  // First, try to find explicit duration mentions
+  const durationPatterns = [
+    // Hours: "1 hour", "2 hours", "1hr", "2hrs", "1.5 hours"
+    { pattern: /(\d+(?:\.\d+)?)\s*(?:hour|hr)s?/gi, multiplier: 60 },
+    // Minutes: "30 minutes", "30 mins", "30min", "45 minutes"
+    { pattern: /(\d+)\s*(?:minute|min)s?/gi, multiplier: 1 },
+  ];
+
+  for (const { pattern, multiplier } of durationPatterns) {
+    const match = pattern.exec(text);
+    if (match) {
+      const value = parseFloat(match[1]);
+      const durationInMinutes = Math.round(value * multiplier);
+      console.log(`Duration parsing: Found explicit duration "${match[0]}" -> ${durationInMinutes} minutes`);
+      return String(durationInMinutes);
+    }
+  }
+
+  // If no explicit duration, try to find time range (e.g., "7:00 PM - 9:00 PM")
+  if (startTime) {
+    const endTime = findEndTimeNearStartTime(text, startTime);
+    if (endTime) {
+      const durationMinutes = calculateDurationBetweenTimes(startTime, endTime);
+      if (durationMinutes > 0) {
+        console.log(`Duration parsing: Calculated from time range -> ${durationMinutes} minutes`);
+        return String(durationMinutes);
+      }
+    }
+  }
+
+  console.log('Duration parsing: No duration found in text');
+  return '60'; // Default to 60 minutes (1 hour)
+};
+
+/**
+ * Find end time near start time in text (looks for patterns like "7:00 PM - 9:00 PM")
+ */
+const findEndTimeNearStartTime = (text, startTime) => {
+  // Look for time range patterns
+  // Matches: "7:00 PM - 9:00 PM", "7PM-9PM", "7:00 to 9:00 PM", "19:00-21:00"
+  const rangePatterns = [
+    // 12-hour with dash: "7:00 PM - 9:00 PM" or "7PM-9PM"
+    /(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)\s*[-–—]\s*(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi,
+    // 12-hour with "to": "7:00 PM to 9:00 PM"
+    /(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:to|until|till)\s+(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi,
+    // 12-hour start, implied PM end: "7-9 PM" or "7:00-9:00 PM"
+    /(\d{1,2}):?(\d{2})?\s*[-–—]\s*(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi,
+    // 24-hour format: "19:00-21:00"
+    /(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})(?!\s*(?:am|pm))/gi,
+  ];
+
+  for (const pattern of rangePatterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      console.log(`Duration parsing: Found time range pattern "${match[0]}"`);
+
+      // Try different group indices based on which pattern matched
+      let endHour, endMinute, endMeridiem;
+
+      if (match[6]) {
+        // Pattern 1 or 2: Full range with both AM/PM
+        endHour = parseInt(match[4]);
+        endMinute = match[5] ? parseInt(match[5]) : 0;
+        endMeridiem = match[6].toLowerCase();
+      } else if (match[5]) {
+        // Pattern 3: Start time - end time with shared AM/PM
+        endHour = parseInt(match[3]);
+        endMinute = match[4] ? parseInt(match[4]) : 0;
+        endMeridiem = match[5].toLowerCase();
+      } else if (match[4]) {
+        // Pattern 4: 24-hour format
+        endHour = parseInt(match[3]);
+        endMinute = parseInt(match[4]);
+        endMeridiem = null;
+      }
+
+      // Convert to 24-hour format if needed
+      if (endMeridiem) {
+        if (endMeridiem.startsWith('p') && endHour !== 12) {
+          endHour += 12;
+        } else if (endMeridiem.startsWith('a') && endHour === 12) {
+          endHour = 0;
+        }
+      }
+
+      // Validate
+      if (endHour >= 0 && endHour < 24 && endMinute >= 0 && endMinute < 60) {
+        console.log(`Duration parsing: ✓ Extracted end time ${endHour}:${String(endMinute).padStart(2, '0')}`);
+        return { hours: endHour, minutes: endMinute };
+      }
+    }
+  }
+
+  return null;
+};
+
+/**
+ * Calculate duration in minutes between two time objects
+ */
+const calculateDurationBetweenTimes = (startTime, endTime) => {
+  const startMinutes = startTime.hours * 60 + startTime.minutes;
+  const endMinutes = endTime.hours * 60 + endTime.minutes;
+
+  let duration = endMinutes - startMinutes;
+
+  // Handle overnight events
+  if (duration < 0) {
+    duration += 24 * 60;
+  }
+
+  // Validate reasonable duration (5 minutes to 12 hours)
+  if (duration >= 5 && duration <= 720) {
+    return duration;
+  }
+
+  return 0; // Invalid duration
 };
 
 /**

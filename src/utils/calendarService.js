@@ -49,11 +49,15 @@ export const saveEventToCalendar = async (eventData) => {
     // Calculate notification time
     const alarmOffset = getAlarmOffset(eventData.notification);
 
+    // Calculate end date based on duration (in minutes)
+    const durationMinutes = parseInt(eventData.duration) || 60; // Default to 60 minutes
+    const endDate = new Date(eventData.date.getTime() + durationMinutes * 60 * 1000);
+
     // Prepare event details
     const eventDetails = {
       title: eventData.title,
       startDate: eventData.date,
-      endDate: new Date(eventData.date.getTime() + 60 * 60 * 1000), // 1 hour duration
+      endDate: endDate,
       location: eventData.location,
       notes: eventData.description,
       calendarId: calendar.id,

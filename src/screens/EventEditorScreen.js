@@ -13,8 +13,9 @@ import {
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useEvent } from '../context/EventContext';
-import { extractTextFromImage, parseEventDetails } from '../utils/ocrService';
+import { extractAndParseEvent } from '../utils/ocrService';
 import { saveEventToCalendar } from '../utils/calendarService';
+import { incrementScanCount, getRemainingScans } from '../utils/purchaseService';
 
 export default function EventEditorScreen({ navigation }) {
   const { state, dispatch } = useEvent();
@@ -81,22 +82,18 @@ export default function EventEditorScreen({ navigation }) {
         console.warn('Unexpected image URI format:', uri);
       }
       
-      console.log('Calling OCR service...');
-      const extractedText = await Promise.race([
-        extractTextFromImage(uri),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('OCR timeout')), 15000)
+      console.log('Calling GPT-powered event extraction pipeline...');
+      const parsedEvents = await Promise.race([
+        extractAndParseEvent(uri),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Event extraction timeout')), 25000)
         )
       ]);
-      console.log('OCR completed, extracted text:', extractedText);
-      
+      console.log('Event extraction completed');
+
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
-      
-      console.log('Parsing event details...');
-      const parsedEvents = parseEventDetails(extractedText);
-      console.log('Parsed event data:', parsedEvents);
       
       // Validate parsed events
       if (!Array.isArray(parsedEvents) || parsedEvents.length === 0) {
@@ -188,11 +185,24 @@ export default function EventEditorScreen({ navigation }) {
 
     try {
       setIsSaving(true);
+
+      // Check scan limit before saving
+      const canSave = await incrementScanCount();
+
+      if (!canSave) {
+        // User has reached scan limit - show upgrade screen
+        const remaining = await getRemainingScans();
+        setIsSaving(false);
+        navigation.navigate('Upgrade', { remainingScans: remaining });
+        return;
+      }
+
+      // Save event to calendar
       const success = await saveEventToCalendar(currentEvent);
-      
+
       if (success) {
         Alert.alert(
-          'Success', 
+          'Success',
           'Event saved to calendar!',
           [
             {
@@ -243,7 +253,7 @@ export default function EventEditorScreen({ navigation }) {
         <View style={styles.dateTimeRow}>
           <View style={styles.dateTimeItem}>
             <Text style={styles.sectionLabel}>Date</Text>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.dateTimeButton}
               onPress={() => {
                 dispatch({ type: 'SELECT_EVENT', payload: index });
@@ -258,7 +268,7 @@ export default function EventEditorScreen({ navigation }) {
           </View>
           <View style={styles.dateTimeItem}>
             <Text style={styles.sectionLabel}>Time</Text>
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.dateTimeButton}
               onPress={() => {
                 dispatch({ type: 'SELECT_EVENT', payload: index });
@@ -271,6 +281,58 @@ export default function EventEditorScreen({ navigation }) {
               </Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </View>
+
+      {/* Duration Section */}
+      <View style={styles.cardSection}>
+        <Text style={styles.sectionLabel}>Duration</Text>
+        <View style={styles.pillsContainer}>
+          <NotificationOption
+            value="15"
+            label="15 min"
+            selected={event.duration === '15'}
+            onPress={(value) => {
+              dispatch({ type: 'SELECT_EVENT', payload: index });
+              handleFieldUpdate('duration', value);
+            }}
+          />
+          <NotificationOption
+            value="30"
+            label="30 min"
+            selected={event.duration === '30'}
+            onPress={(value) => {
+              dispatch({ type: 'SELECT_EVENT', payload: index });
+              handleFieldUpdate('duration', value);
+            }}
+          />
+          <NotificationOption
+            value="60"
+            label="1 hour"
+            selected={event.duration === '60'}
+            onPress={(value) => {
+              dispatch({ type: 'SELECT_EVENT', payload: index });
+              handleFieldUpdate('duration', value);
+            }}
+          />
+          <NotificationOption
+            value="90"
+            label="1.5 hours"
+            selected={event.duration === '90'}
+            onPress={(value) => {
+              dispatch({ type: 'SELECT_EVENT', payload: index });
+              handleFieldUpdate('duration', value);
+            }}
+          />
+          <NotificationOption
+            value="120"
+            label="2 hours"
+            selected={event.duration === '120'}
+            onPress={(value) => {
+              dispatch({ type: 'SELECT_EVENT', payload: index });
+              handleFieldUpdate('duration', value);
+            }}
+          />
         </View>
       </View>
 
@@ -489,25 +551,25 @@ const { width: screenWidth } = Dimensions.get('window');
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FAFAFA',
   },
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FAFAFA',
   },
   loadingText: {
     marginTop: 16,
     fontSize: 17,
     fontWeight: '400',
-    color: '#86868B',
+    color: '#6B6B6B',
   },
   header: {
     paddingTop: 60,
     paddingHorizontal: 24,
     paddingBottom: 32,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FAFAFA',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -519,7 +581,7 @@ const styles = StyleSheet.create({
   backButtonText: {
     fontSize: 17,
     fontWeight: '400',
-    color: '#007AFF',
+    color: '#000000',
     letterSpacing: -0.4,
   },
   titleContainer: {
@@ -529,7 +591,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#1D1D1F',
+    color: '#000000',
     textAlign: 'center',
     letterSpacing: -0.6,
   },
@@ -539,7 +601,7 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 15,
     fontWeight: '400',
-    color: '#86868B',
+    color: '#6B6B6B',
     textAlign: 'center',
     marginTop: 2,
     letterSpacing: -0.2,
@@ -552,20 +614,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
   eventCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FFF0F0',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: '#E0E0E0',
     padding: 24,
     marginVertical: 8,
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: 1,
+      height: 2,
     },
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 1,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
   },
   cardSection: {
     marginBottom: 24,
@@ -573,7 +635,7 @@ const styles = StyleSheet.create({
   titleInput: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#1D1D1F',
+    color: '#000000',
     backgroundColor: 'transparent',
     padding: 0,
     margin: 0,
@@ -582,10 +644,11 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     fontSize: 13,
-    fontWeight: '500',
-    color: '#86868B',
+    fontWeight: '600',
+    color: '#6B6B6B',
     marginBottom: 8,
     letterSpacing: -0.1,
+    textTransform: 'uppercase',
   },
   dateTimeRow: {
     flexDirection: 'row',
@@ -596,39 +659,39 @@ const styles = StyleSheet.create({
     marginHorizontal: 6,
   },
   dateTimeButton: {
-    backgroundColor: '#F2F2F7',
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
     padding: 16,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: '#D0D0D0',
   },
   dateTimeValue: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#1D1D1F',
+    color: '#000000',
     letterSpacing: -0.4,
   },
   locationInput: {
-    backgroundColor: '#F2F2F7',
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: '#D0D0D0',
     padding: 16,
     fontSize: 17,
     fontWeight: '400',
-    color: '#1D1D1F',
+    color: '#000000',
     letterSpacing: -0.4,
   },
   descriptionInput: {
-    backgroundColor: '#F2F2F7',
-    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: '#D0D0D0',
     padding: 16,
     fontSize: 17,
     fontWeight: '400',
-    color: '#1D1D1F',
+    color: '#000000',
     height: 88,
     textAlignVertical: 'top',
     letterSpacing: -0.4,
@@ -639,20 +702,20 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   notificationPill: {
-    backgroundColor: '#F2F2F7',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
     paddingVertical: 12,
-    borderRadius: 20,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
+    borderColor: '#D0D0D0',
   },
   selectedPill: {
-    backgroundColor: '#007AFF',
-    borderColor: '#007AFF',
+    backgroundColor: '#000000',
+    borderColor: '#000000',
   },
   pillText: {
     fontSize: 15,
-    color: '#1D1D1F',
+    color: '#000000',
     fontWeight: '500',
     letterSpacing: -0.2,
   },
@@ -668,30 +731,30 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#D1D1D6',
+    backgroundColor: '#D0D0D0',
     marginHorizontal: 5,
   },
   activeIndicator: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#000000',
   },
   saveButtonContainer: {
     paddingHorizontal: 24,
     paddingBottom: 40,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FAFAFA',
   },
   saveButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#000000',
     paddingVertical: 18,
-    borderRadius: 14,
+    borderRadius: 12,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: {
       width: 0,
-      height: 1,
+      height: 4,
     },
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
-    elevation: 1,
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
   },
   saveButtonText: {
     color: '#FFFFFF',
@@ -705,7 +768,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'flex-end',
   },
   pickerContainer: {
@@ -720,11 +783,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#e1e5e9',
+    borderBottomColor: '#D0D0D0',
   },
   pickerDone: {
     fontSize: 17,
-    color: '#007AFF',
+    color: '#000000',
     fontWeight: '600',
   },
 });

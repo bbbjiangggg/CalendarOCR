@@ -7,6 +7,7 @@ const initialEventData = {
   date: new Date(),
   location: '',
   description: '',
+  duration: '60', // Duration in minutes (default 60 min = 1 hour)
   notification: '1hr',
   calendar: 'default'
 };

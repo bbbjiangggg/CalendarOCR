@@ -2,25 +2,38 @@
   "expo": {
     "name": "CalendarOCR",
     "slug": "CalendarOCR",
-    "version": "1.0.0",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": false,
+    "description": "Turn event posters into calendar events instantly with AI-powered OCR",
+    "privacy": "public",
+    "platforms": ["ios"],
+    "primaryColor": "#000000",
     "plugins": [
-      "expo-dev-client"
+      "expo-dev-client",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ]
     ],
     "splash": {
-      "image": "./assets/splash-icon.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#FAFAFA"
     },
     "ios": {
       "supportsTablet": true,
+      "buildNumber": "7",
       "infoPlist": {
-        "NSCameraUsageDescription": "This app needs access to camera to capture event posters",
-        "NSCalendarsUsageDescription": "This app needs access to your calendar to save events",
-        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to select event posters",
+        "NSCameraUsageDescription": "CalendarOCR needs access to your camera to capture photos of event posters and flyers. The app uses the camera to take pictures that will be analyzed to extract event information such as dates, times, and locations.",
+        "NSCalendarsUsageDescription": "CalendarOCR needs access to your calendar to save events that have been extracted from photos of posters and flyers. This allows the app to create calendar entries with the detected event details.",
+        "NSPhotoLibraryUsageDescription": "CalendarOCR needs access to your photo library to allow you to select existing photos of event posters and flyers. The app will analyze these images to extract event information and create calendar entries.",
         "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.bowenjiang.CalendarOCR"
@@ -28,7 +41,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#FAFAFA"
       },
       "permissions": [
         "CAMERA",

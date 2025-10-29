@@ -14,9 +14,22 @@
     "preview": {
       "distribution": "internal"
     },
-    "production": {}
+    "production": {
+      "android": {
+        "buildType": "apk"
+      }
+    }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "bowenj2005@outlook.com",
+        "ascAppId": "16756199409",
+        "appleTeamId": "RUFA6U4ZG7"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./google-play-service-account.json"
+      }
+    }
   }
 }

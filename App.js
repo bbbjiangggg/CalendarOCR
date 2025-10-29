@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -6,11 +6,27 @@ import { EventProvider } from './src/context/EventContext';
 import LandingScreen from './src/screens/LandingScreen';
 import CameraScreen from './src/screens/CameraScreen';
 import EventEditorScreen from './src/screens/EventEditorScreen';
+import UpgradeScreen from './src/screens/UpgradeScreen';
 import ErrorBoundary from './src/components/ErrorBoundary';
+import { initIAP, endIAP, setupPurchaseListener } from './src/utils/purchaseService';
 
 const Stack = createStackNavigator();
 
 export default function App() {
+  useEffect(() => {
+    // Initialize in-app purchases
+    initIAP();
+
+    // Set up purchase listener
+    const cleanup = setupPurchaseListener();
+
+    // Cleanup on unmount
+    return () => {
+      cleanup();
+      endIAP();
+    };
+  }, []);
+
   return (
     <ErrorBoundary>
       <EventProvider>
@@ -25,6 +41,13 @@ export default function App() {
             <Stack.Screen name="Landing" component={LandingScreen} />
             <Stack.Screen name="Camera" component={CameraScreen} />
             <Stack.Screen name="EventEditor" component={EventEditorScreen} />
+            <Stack.Screen
+              name="Upgrade"
+              component={UpgradeScreen}
+              options={{
+                presentation: 'modal',
+              }}
+            />
           </Stack.Navigator>
           <StatusBar style="light" />
         </NavigationContainer>

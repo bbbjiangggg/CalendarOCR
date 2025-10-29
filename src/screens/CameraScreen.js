@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Dimensions, ActivityIndicator } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { useEvent } from '../context/EventContext';
 
@@ -45,22 +45,26 @@ export default function CameraScreen({ navigation }) {
     }
   };
 
-  if (!permission) {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.text}>Requesting camera permission...</Text>
-      </View>
-    );
-  }
+  // Automatically request permission when component mounts
+  React.useEffect(() => {
+    if (permission && !permission.granted && !permission.canAskAgain) {
+      // If user previously denied and can't ask again, go back
+      Alert.alert(
+        'Camera Permission Required',
+        'Please enable camera access in Settings to capture event posters.',
+        [{ text: 'OK', onPress: () => navigation.navigate('Landing') }]
+      );
+    } else if (permission && !permission.granted) {
+      // Automatically request permission using native dialog
+      requestPermission();
+    }
+  }, [permission]);
 
-  if (!permission.granted) {
+  if (!permission || !permission.granted) {
     return (
       <View style={styles.container}>
-        <Text style={styles.text}>Camera access required</Text>
-        <Text style={styles.subText}>Please enable camera access to capture event posters</Text>
-        <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
-          <Text style={styles.permissionButtonText}>Grant Permission</Text>
-        </TouchableOpacity>
+        <ActivityIndicator size="large" color="#000000" />
+        <Text style={styles.text}>Preparing camera...</Text>
       </View>
     );
   }
@@ -73,18 +77,20 @@ export default function CameraScreen({ navigation }) {
         ref={cameraRef}
       >
         <View style={styles.overlay}>
-          <View style={styles.header}>
-            <TouchableOpacity 
-              style={styles.backButton}
-              onPress={() => navigation.navigate('Landing')}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.backButtonText}>← Back</Text>
-            </TouchableOpacity>
-            <Text style={styles.headerText}>Position poster in frame</Text>
-            <View style={styles.spacer} />
+          {/* Back Button - Top Left */}
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.navigate('Landing')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.backButtonText}>✕</Text>
+          </TouchableOpacity>
+
+          {/* Instruction Text - Top Center */}
+          <View style={styles.instructionContainer}>
+            <Text style={styles.instructionText}>Position poster in frame</Text>
           </View>
-          
+
           <View style={styles.focusArea} />
           
           <View style={styles.controls}>
@@ -104,7 +110,7 @@ export default function CameraScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FAFAFA',
   },
   camera: {
     flex: 1,
@@ -113,48 +119,51 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'transparent',
   },
-  header: {
+  backButton: {
     position: 'absolute',
     top: 60,
-    left: 0,
-    right: 0,
-    flexDirection: 'row',
+    left: 24,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    justifyContent: 'center',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    zIndex: 1,
-  },
-  backButton: {
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 18,
-    minWidth: 70,
-    backdropFilter: 'blur(20px)',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
+    zIndex: 10,
   },
   backButtonText: {
+    color: '#000000',
+    fontSize: 24,
+    fontWeight: '400',
+    lineHeight: 24,
+  },
+  instructionContainer: {
+    position: 'absolute',
+    top: 120,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  instructionText: {
     color: '#FFFFFF',
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '500',
     textAlign: 'center',
-    letterSpacing: -0.4,
-  },
-  spacer: {
-    minWidth: 70,
-  },
-  headerText: {
-    color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '600',
-    textAlign: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 18,
-    flex: 1,
-    marginHorizontal: 10,
-    letterSpacing: -0.4,
-    backdropFilter: 'blur(20px)',
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+    overflow: 'hidden',
+    letterSpacing: -0.2,
   },
   focusArea: {
     position: 'absolute',
@@ -163,7 +172,7 @@ const styles = StyleSheet.create({
     right: '10%',
     bottom: '30%',
     borderWidth: 2,
-    borderColor: '#fff',
+    borderColor: '#FFFFFF',
     borderRadius: 12,
     backgroundColor: 'transparent',
   },
@@ -178,11 +187,11 @@ const styles = StyleSheet.create({
     width: 76,
     height: 76,
     borderRadius: 38,
-    backgroundColor: 'rgba(255,255,255,0.15)',
+    backgroundColor: 'rgba(0,0,0,0.3)',
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
-    borderColor: 'rgba(255,255,255,0.8)',
+    borderColor: '#FFFFFF',
     backdropFilter: 'blur(20px)',
   },
   captureInner: {
@@ -193,7 +202,7 @@ const styles = StyleSheet.create({
   },
   text: {
     fontSize: 20,
-    color: '#1D1D1F',
+    color: '#000000',
     textAlign: 'center',
     marginTop: 100,
     fontWeight: '600',
@@ -201,7 +210,7 @@ const styles = StyleSheet.create({
   },
   subText: {
     fontSize: 17,
-    color: '#86868B',
+    color: '#6B6B6B',
     textAlign: 'center',
     marginTop: 12,
     paddingHorizontal: 40,
@@ -209,12 +218,20 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
   },
   permissionButton: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#000000',
     paddingHorizontal: 32,
     paddingVertical: 16,
-    borderRadius: 14,
+    borderRadius: 12,
     marginTop: 32,
     alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
   },
   permissionButtonText: {
     color: '#FFFFFF',
