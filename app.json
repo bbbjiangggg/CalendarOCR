@@ -2,7 +2,7 @@
   "expo": {
     "name": "CalendarOCR",
     "slug": "CalendarOCR",
-    "version": "1.0.6",
+    "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -29,7 +29,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "7",
+      "buildNumber": "8",
       "infoPlist": {
         "NSCameraUsageDescription": "CalendarOCR needs access to your camera to capture photos of event posters and flyers. The app uses the camera to take pictures that will be analyzed to extract event information such as dates, times, and locations.",
         "NSCalendarsUsageDescription": "CalendarOCR needs access to your calendar to save events that have been extracted from photos of posters and flyers. This allows the app to create calendar entries with the detected event details.",

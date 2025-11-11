@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, Dimensions, ActivityIndicator } from 'react-native';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useEvent } from '../context/EventContext';
 
 const { width, height } = Dimensions.get('window');
@@ -8,6 +9,7 @@ const { width, height } = Dimensions.get('window');
 export default function CameraScreen({ navigation }) {
   const [facing, setFacing] = useState('back');
   const [permission, requestPermission] = useCameraPermissions();
+  const [zoom, setZoom] = useState(0);
   const cameraRef = useRef(null);
   const { dispatch } = useEvent();
 
@@ -15,22 +17,22 @@ export default function CameraScreen({ navigation }) {
     if (cameraRef.current) {
       try {
         dispatch({ type: 'SET_PROCESSING', payload: true });
-        
+
         const photo = await Promise.race([
           cameraRef.current.takePictureAsync({
             quality: 0.6,
             base64: false,
             skipProcessing: false,
           }),
-          new Promise((_, reject) => 
+          new Promise((_, reject) =>
             setTimeout(() => reject(new Error('Camera timeout')), 10000)
           )
         ]);
-        
+
         if (!photo || !photo.uri) {
           throw new Error('Invalid photo captured');
         }
-        
+
         console.log('Photo captured successfully:', photo.uri);
         dispatch({ type: 'SET_IMAGE', payload: photo });
         navigation.navigate('EventEditor');
@@ -44,6 +46,13 @@ export default function CameraScreen({ navigation }) {
       Alert.alert('Camera Error', 'Camera is not ready. Please try again.');
     }
   };
+
+  // Pinch gesture for zoom
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((event) => {
+      const newZoom = Math.min(Math.max(zoom + (event.scale - 1) * 0.02, 0), 1);
+      setZoom(newZoom);
+    });
 
   // Automatically request permission when component mounts
   React.useEffect(() => {
@@ -71,38 +80,41 @@ export default function CameraScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      <CameraView 
-        style={styles.camera} 
-        facing={facing}
-        ref={cameraRef}
-      >
-        <View style={styles.overlay}>
-          {/* Back Button - Top Left */}
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.navigate('Landing')}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.backButtonText}>✕</Text>
-          </TouchableOpacity>
-
-          {/* Instruction Text - Top Center */}
-          <View style={styles.instructionContainer}>
-            <Text style={styles.instructionText}>Position poster in frame</Text>
-          </View>
-
-          <View style={styles.focusArea} />
-          
-          <View style={styles.controls}>
-            <TouchableOpacity 
-              style={styles.captureButton}
-              onPress={takePicture}
+      <GestureDetector gesture={pinchGesture}>
+        <CameraView
+          style={styles.camera}
+          facing={facing}
+          zoom={zoom}
+          ref={cameraRef}
+        >
+          <View style={styles.overlay}>
+            {/* Back Button - Top Left */}
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => navigation.navigate('Landing')}
+              activeOpacity={0.7}
             >
-              <View style={styles.captureInner} />
+              <Text style={styles.backButtonText}>✕</Text>
             </TouchableOpacity>
+
+            {/* Instruction Text - Top Center */}
+            <View style={styles.instructionContainer}>
+              <Text style={styles.instructionText}>Position poster in frame</Text>
+            </View>
+
+            <View style={styles.focusArea} />
+
+            <View style={styles.controls}>
+              <TouchableOpacity
+                style={styles.captureButton}
+                onPress={takePicture}
+              >
+                <View style={styles.captureInner} />
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </CameraView>
+        </CameraView>
+      </GestureDetector>
     </View>
   );
 }

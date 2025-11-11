@@ -7,6 +7,8 @@ import {
   SafeAreaView,
   Alert,
   ActivityIndicator,
+  Dimensions,
+  ScrollView,
 } from 'react-native';
 import { purchasePro, restorePurchases } from '../utils/purchaseService';
 
@@ -15,6 +17,11 @@ export default function UpgradeScreen({ navigation, route }) {
   const [isRestoring, setIsRestoring] = useState(false);
 
   const { remainingScans = 0 } = route.params || {};
+
+  // Responsive design: detect screen size
+  const { width, height } = Dimensions.get('window');
+  const isSmallScreen = width <= 375 || height <= 700; // iPhone 13 mini, SE
+  const isTablet = width > 600; // iPad
 
   const handlePurchase = async () => {
     try {
@@ -76,7 +83,14 @@ export default function UpgradeScreen({ navigation, route }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.content,
+          isTablet && styles.contentTablet,
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Close Button */}
         <TouchableOpacity
           style={styles.closeButton}
@@ -87,9 +101,18 @@ export default function UpgradeScreen({ navigation, route }) {
         </TouchableOpacity>
 
         {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.emoji}>🚀</Text>
-          <Text style={styles.title}>Upgrade to Pro</Text>
+        <View style={[
+          styles.header,
+          isSmallScreen && styles.headerSmall,
+        ]}>
+          <Text style={[
+            styles.emoji,
+            isSmallScreen && styles.emojiSmall,
+          ]}>🚀</Text>
+          <Text style={[
+            styles.title,
+            isSmallScreen && styles.titleSmall,
+          ]}>Upgrade to Pro</Text>
           <Text style={styles.subtitle}>
             {remainingScans === 0
               ? "You've used all your free scans this month"
@@ -98,17 +121,26 @@ export default function UpgradeScreen({ navigation, route }) {
         </View>
 
         {/* Features */}
-        <View style={styles.features}>
-          <Feature icon="∞" text="Unlimited scans" />
-          <Feature icon="✓" text="No subscriptions" />
-          <Feature icon="✓" text="Pay once, use forever" />
-          <Feature icon="✓" text="Support development" />
+        <View style={[
+          styles.features,
+          isSmallScreen && styles.featuresSmall,
+        ]}>
+          <Feature icon="∞" text="Unlimited scans" isSmallScreen={isSmallScreen} />
+          <Feature icon="✓" text="No subscriptions" isSmallScreen={isSmallScreen} />
+          <Feature icon="✓" text="Pay once, use forever" isSmallScreen={isSmallScreen} />
+          <Feature icon="✓" text="Support development" isSmallScreen={isSmallScreen} />
         </View>
 
         {/* Price */}
-        <View style={styles.priceContainer}>
+        <View style={[
+          styles.priceContainer,
+          isSmallScreen && styles.priceContainerSmall,
+        ]}>
           <Text style={styles.priceLabel}>One-time payment</Text>
-          <Text style={styles.price}>$2.99</Text>
+          <Text style={[
+            styles.price,
+            isSmallScreen && styles.priceSmall,
+          ]}>$2.99</Text>
           <Text style={styles.priceSubtext}>No hidden fees · Lifetime access</Text>
         </View>
 
@@ -145,15 +177,24 @@ export default function UpgradeScreen({ navigation, route }) {
           <Text style={styles.footer}>Secure payment powered by</Text>
           <Text style={styles.footer}>Apple In-App Purchase</Text>
         </View>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-const Feature = ({ icon, text }) => (
-  <View style={styles.feature}>
-    <Text style={styles.featureIcon}>{icon}</Text>
-    <Text style={styles.featureText}>{text}</Text>
+const Feature = ({ icon, text, isSmallScreen }) => (
+  <View style={[
+    styles.feature,
+    isSmallScreen && styles.featureSmall,
+  ]}>
+    <Text style={[
+      styles.featureIcon,
+      isSmallScreen && styles.featureIconSmall,
+    ]}>{icon}</Text>
+    <Text style={[
+      styles.featureText,
+      isSmallScreen && styles.featureTextSmall,
+    ]}>{text}</Text>
   </View>
 );
 
@@ -162,11 +203,20 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FAFAFA',
   },
-  content: {
+  scrollView: {
     flex: 1,
-    paddingHorizontal: 32,
+  },
+  content: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
     paddingTop: 20,
-    paddingBottom: 40,
+    paddingBottom: 24,
+  },
+  contentTablet: {
+    maxWidth: 500,
+    alignSelf: 'center',
+    width: '100%',
+    paddingHorizontal: 48,
   },
   closeButton: {
     alignSelf: 'flex-end',
@@ -282,13 +332,17 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
   },
   restoreButton: {
-    paddingVertical: 12,
+    paddingVertical: 16,
     alignItems: 'center',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D0D0D0',
+    backgroundColor: '#FFFFFF',
   },
   restoreButtonText: {
-    color: '#6B6B6B',
-    fontSize: 15,
-    fontWeight: '500',
+    color: '#333333',
+    fontSize: 16,
+    fontWeight: '600',
     letterSpacing: -0.2,
   },
   footerContainer: {
@@ -302,5 +356,36 @@ const styles = StyleSheet.create({
     fontWeight: '400',
     color: '#6B6B6B',
     lineHeight: 18,
+  },
+  // Responsive styles for small screens (iPhone 13 mini, SE)
+  headerSmall: {
+    marginTop: 28,
+    marginBottom: 36,
+  },
+  emojiSmall: {
+    fontSize: 56,
+  },
+  titleSmall: {
+    marginBottom: 8,
+  },
+  featuresSmall: {
+    marginBottom: 32,
+  },
+  featureSmall: {
+    marginBottom: 12,
+  },
+  featureIconSmall: {
+    fontSize: 20,
+    width: 28,
+  },
+  featureTextSmall: {
+    fontSize: 16,
+  },
+  priceContainerSmall: {
+    paddingVertical: 18,
+    marginBottom: 24,
+  },
+  priceSmall: {
+    fontSize: 40,
   },
 });
