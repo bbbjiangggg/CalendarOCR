@@ -52,6 +52,22 @@ target 'CalendarOCR' do
       :ccache_enabled => podfile_properties['apple.ccacheEnabled'] == 'true',
     )
 
+    # --- Fix fmt consteval build failure on Xcode 26 / Apple Clang ---
+    # React Native 0.76 bundles fmt 11.0.2, whose consteval format-string checks
+    # newer Apple Clang rejects ("call to consteval function ... is not a
+    # constant expression"). Force FMT_USE_CONSTEVAL off so fmt falls back to
+    # runtime validation. Upstream fixed this by bumping fmt in RN >= 0.83; on
+    # 0.76 we patch the header at install time. Idempotent.
+    fmt_base = File.join(installer.sandbox.root, 'fmt', 'include', 'fmt', 'base.h')
+    if File.exist?(fmt_base)
+      original = File.read(fmt_base)
+      patched = original.gsub(/(#\s*define\s+FMT_USE_CONSTEVAL\s+)1\b/, '\10')
+      if patched != original
+        File.write(fmt_base, patched)
+        Pod::UI.puts '[fmt patch] FMT_USE_CONSTEVAL forced to 0 for Xcode 26 compatibility'
+      end
+    end
+
     # This is necessary for Xcode 14, because it signs resource bundles by default
     # when building for devices.
     installer.target_installation_results.pod_target_installation_results
