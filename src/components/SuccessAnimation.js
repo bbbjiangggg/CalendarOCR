@@ -70,16 +70,29 @@ export default function SuccessAnimation({ visible, title, onComplete, mode = 'f
       }
       if (cancelled) return;
 
+      // For the go-home ('full') case, keep the overlay OPAQUE through the end —
+      // the screen's fade transition carries us to Landing, so the event card is
+      // never revealed. For 'brief' (advancing to the next card on the same
+      // screen) we do fade out to uncover that next card.
+      const keepOpaque = mode === 'full';
+      const fadeOut = Animated.timing(backdrop, {
+        toValue: 0,
+        duration: 450,
+        easing: Easing.in(Easing.quad),
+        useNativeDriver: true,
+      });
+
       // Accessible fallback: a simple fade, no motion.
       if (reduceMotion) {
         checkScale.setValue(1);
         textOpacity.setValue(1);
         textTranslate.setValue(0);
-        Animated.sequence([
+        const steps = [
           Animated.timing(backdrop, { toValue: 1, duration: 220, useNativeDriver: true }),
           Animated.delay(700),
-          Animated.timing(backdrop, { toValue: 0, duration: 400, useNativeDriver: true }),
-        ]).start(finish);
+        ];
+        if (!keepOpaque) steps.push(fadeOut);
+        Animated.sequence(steps).start(finish);
         return;
       }
 
@@ -88,7 +101,7 @@ export default function SuccessAnimation({ visible, title, onComplete, mode = 'f
       const showConfetti = mode === 'full';
       const holdMs = mode === 'full' ? 700 : 350;
 
-      Animated.sequence([
+      const steps = [
         Animated.timing(backdrop, {
           toValue: 1,
           duration: 240,
@@ -130,13 +143,9 @@ export default function SuccessAnimation({ visible, title, onComplete, mode = 'f
           ]),
         ]),
         Animated.delay(holdMs),
-        Animated.timing(backdrop, {
-          toValue: 0,
-          duration: 450,
-          easing: Easing.in(Easing.quad),
-          useNativeDriver: true,
-        }),
-      ]).start(({ finished }) => {
+      ];
+      if (!keepOpaque) steps.push(fadeOut);
+      Animated.sequence(steps).start(({ finished }) => {
         if (finished) finish();
       });
     };

@@ -128,9 +128,18 @@ export default function EventEditorScreen({ navigation }) {
 
   // Runs once the success animation finishes: perform the deferred navigation.
   const handleSuccessComplete = () => {
-    const next = success && success.next;
-    setSuccess(null);
-    if (next) next();
+    const cfg = success;
+    if (!cfg) return;
+    if (cfg.mode === 'full') {
+      // Overlay is still opaque and covering the card. Navigate now — the screen's
+      // fade transition carries the opaque overlay out to Landing, so the card
+      // never flashes. Don't clear `success` here; it unmounts with the screen.
+      if (cfg.next) cfg.next();
+    } else {
+      // 'brief': overlay has already faded out to reveal the next card.
+      setSuccess(null);
+      if (cfg.next) cfg.next();
+    }
   };
 
   // Let the user skip OCR and fill in a blank event by hand.

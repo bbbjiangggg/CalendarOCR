@@ -12,6 +12,12 @@ import { initIAP, endIAP, setupPurchaseListener } from './src/utils/purchaseServ
 
 const Stack = createStackNavigator();
 
+// Simple cross-fade transition. Used for the EventEditor screen so that after a
+// save, the opaque success overlay fades directly to Landing (no card flash).
+const forFade = ({ current }) => ({
+  cardStyle: { opacity: current.progress },
+});
+
 export default function App() {
   useEffect(() => {
     // Initialize in-app purchases
@@ -40,7 +46,11 @@ export default function App() {
           >
             <Stack.Screen name="Landing" component={LandingScreen} />
             <Stack.Screen name="Camera" component={CameraScreen} />
-            <Stack.Screen name="EventEditor" component={EventEditorScreen} />
+            <Stack.Screen
+              name="EventEditor"
+              component={EventEditorScreen}
+              options={{ cardStyleInterpolator: forFade }}
+            />
             <Stack.Screen
               name="Upgrade"
               component={UpgradeScreen}
