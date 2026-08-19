@@ -13,6 +13,7 @@ import {
   Keyboard
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useEvent } from '../context/EventContext';
 import { extractAndParseEvent, OCR_ERROR } from '../utils/ocrService';
@@ -274,208 +275,212 @@ export default function EventEditorScreen({ navigation }) {
   };
 
   const NotificationOption = ({ value, label, selected, onPress }) => (
-    <TouchableOpacity 
-      style={[styles.notificationPill, selected && styles.selectedPill]}
+    <TouchableOpacity
+      style={[styles.pill, selected && styles.pillSelected]}
       onPress={() => onPress(value)}
+      activeOpacity={0.7}
     >
-      <Text style={[styles.pillText, selected && styles.selectedPillText]}>
+      <Text style={[styles.pillText, selected && styles.pillTextSelected]}>
         {label}
       </Text>
     </TouchableOpacity>
   );
 
+  const SectionHeader = ({ icon, label }) => (
+    <View style={styles.labelRow}>
+      <Feather name={icon} size={13} color="#B58B8B" style={styles.labelIcon} />
+      <Text style={styles.fieldLabel}>{label}</Text>
+    </View>
+  );
+
   const renderEventCard = (event, index) => (
     <View key={index} style={styles.eventCard}>
-      {/* Event Title */}
-      <View style={styles.cardSection}>
-        <TextInput
-          style={styles.titleInput}
-          value={event.title}
-          onChangeText={(value) => handleFieldUpdate('title', value)}
-          placeholder="Event Title"
-          placeholderTextColor="#999"
-          multiline
-          returnKeyType="done"
-          blurOnSubmit
-          onSubmitEditing={() => Keyboard.dismiss()}
-        />
-      </View>
+      {/* Title */}
+      <TextInput
+        style={styles.titleInput}
+        value={event.title}
+        onChangeText={(value) => handleFieldUpdate('title', value)}
+        placeholder="Event Title"
+        placeholderTextColor="#C9B3B3"
+        multiline
+        returnKeyType="done"
+        blurOnSubmit
+        onSubmitEditing={() => Keyboard.dismiss()}
+      />
 
-      {/* Date & Time Section */}
-      <View style={styles.cardSection}>
-        <View style={styles.dateTimeRow}>
-          <View style={styles.dateTimeItem}>
-            <Text style={styles.sectionLabel}>Date</Text>
-            <TouchableOpacity
-              style={styles.dateTimeButton}
-              onPress={() => {
-                dispatch({ type: 'SELECT_EVENT', payload: index });
-                setShowDatePicker(true);
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.dateTimeValue}>
-                {formatDate(event.date)}
-              </Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.dateTimeItem}>
-            <Text style={styles.sectionLabel}>Time</Text>
-            <TouchableOpacity
-              style={styles.dateTimeButton}
-              onPress={() => {
-                dispatch({ type: 'SELECT_EVENT', payload: index });
-                setShowTimePicker(true);
-              }}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.dateTimeValue}>
-                {formatTime(event.date)}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
+      <View style={styles.divider} />
 
-      {/* Duration Section */}
-      <View style={styles.cardSection}>
-        <Text style={styles.sectionLabel}>Duration</Text>
-        <View style={styles.durationGrid}>
-          <NotificationOption
-            value="15"
-            label="15 min"
-            selected={event.duration === '15'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('duration', value);
-            }}
-          />
-          <NotificationOption
-            value="30"
-            label="30 min"
-            selected={event.duration === '30'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('duration', value);
-            }}
-          />
-          <NotificationOption
-            value="60"
-            label="1 hour"
-            selected={event.duration === '60'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('duration', value);
-            }}
-          />
-          <NotificationOption
-            value="120"
-            label="2 hours"
-            selected={event.duration === '120'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('duration', value);
-            }}
-          />
-          <NotificationOption
-            value="1440"
-            label="All day"
-            selected={event.duration === '1440'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('duration', value);
-            }}
-          />
-          <NotificationOption
-            value="custom"
-            label="Custom"
-            selected={event.duration && !['15', '30', '60', '120', '1440'].includes(event.duration)}
-            onPress={() => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              // Initialize local state with current duration, default to 15 minutes
-              const currentDuration = parseInt(event.duration || '15');
-              setCustomDurationValue(currentDuration);
-              setShowCustomDuration(true);
-            }}
-          />
-        </View>
-      </View>
-
-      {/* Location Section */}
-      <View style={styles.cardSection}>
-        <Text style={styles.sectionLabel}>Location</Text>
-        <TextInput
-          style={styles.locationInput}
-          value={event.location}
-          onChangeText={(value) => {
+      {/* When — Date | Time split (Airbnb check-in/out style) */}
+      <View style={styles.whenCard}>
+        <TouchableOpacity
+          style={styles.whenCol}
+          activeOpacity={0.7}
+          onPress={() => {
             dispatch({ type: 'SELECT_EVENT', payload: index });
-            handleFieldUpdate('location', value);
+            setShowDatePicker(true);
           }}
-          placeholder="Add location"
-          placeholderTextColor="#999"
-          returnKeyType="done"
-          onSubmitEditing={() => Keyboard.dismiss()}
-        />
-      </View>
-
-      {/* Description Section */}
-      <View style={styles.cardSection}>
-        <Text style={styles.sectionLabel}>Notes</Text>
-        <TextInput
-          style={styles.descriptionInput}
-          value={event.description}
-          onChangeText={(value) => {
+        >
+          <View style={styles.labelRow}>
+            <Feather name="calendar" size={13} color="#B58B8B" style={styles.labelIcon} />
+            <Text style={styles.fieldLabel}>DATE</Text>
+          </View>
+          <Text style={styles.whenValue}>{formatDate(event.date)}</Text>
+        </TouchableOpacity>
+        <View style={styles.whenDivider} />
+        <TouchableOpacity
+          style={styles.whenCol}
+          activeOpacity={0.7}
+          onPress={() => {
             dispatch({ type: 'SELECT_EVENT', payload: index });
-            handleFieldUpdate('description', value);
+            setShowTimePicker(true);
           }}
-          placeholder="Add notes (optional)"
-          placeholderTextColor="#999"
-          multiline
-          numberOfLines={3}
+        >
+          <View style={styles.labelRow}>
+            <Feather name="clock" size={13} color="#B58B8B" style={styles.labelIcon} />
+            <Text style={styles.fieldLabel}>TIME</Text>
+          </View>
+          <Text style={styles.whenValue}>{formatTime(event.date)}</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.divider} />
+
+      {/* Duration */}
+      <SectionHeader icon="watch" label="DURATION" />
+      <View style={styles.pillWrap}>
+        <NotificationOption
+          value="15"
+          label="15 min"
+          selected={event.duration === '15'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('duration', value);
+          }}
+        />
+        <NotificationOption
+          value="30"
+          label="30 min"
+          selected={event.duration === '30'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('duration', value);
+          }}
+        />
+        <NotificationOption
+          value="60"
+          label="1 hour"
+          selected={event.duration === '60'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('duration', value);
+          }}
+        />
+        <NotificationOption
+          value="120"
+          label="2 hours"
+          selected={event.duration === '120'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('duration', value);
+          }}
+        />
+        <NotificationOption
+          value="1440"
+          label="All day"
+          selected={event.duration === '1440'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('duration', value);
+          }}
+        />
+        <NotificationOption
+          value="custom"
+          label="Custom"
+          selected={event.duration && !['15', '30', '60', '120', '1440'].includes(event.duration)}
+          onPress={() => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            const currentDuration = parseInt(event.duration || '15');
+            setCustomDurationValue(currentDuration);
+            setShowCustomDuration(true);
+          }}
         />
       </View>
 
-      {/* Reminder Section */}
-      <View style={styles.cardSection}>
-        <Text style={styles.sectionLabel}>Reminder</Text>
-        <View style={styles.pillsContainer}>
-          <NotificationOption
-            value="none"
-            label="None"
-            selected={event.notification === 'none'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('notification', value);
-            }}
-          />
-          <NotificationOption
-            value="10min"
-            label="10 min"
-            selected={event.notification === '10min'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('notification', value);
-            }}
-          />
-          <NotificationOption
-            value="1hr"
-            label="1 hour"
-            selected={event.notification === '1hr'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('notification', value);
-            }}
-          />
-          <NotificationOption
-            value="1day"
-            label="1 day"
-            selected={event.notification === '1day'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('notification', value);
-            }}
-          />
-        </View>
+      <View style={styles.divider} />
+
+      {/* Location */}
+      <SectionHeader icon="map-pin" label="LOCATION" />
+      <TextInput
+        style={styles.wellInput}
+        value={event.location}
+        onChangeText={(value) => {
+          dispatch({ type: 'SELECT_EVENT', payload: index });
+          handleFieldUpdate('location', value);
+        }}
+        placeholder="Add location"
+        placeholderTextColor="#C9B3B3"
+        returnKeyType="done"
+        onSubmitEditing={() => Keyboard.dismiss()}
+      />
+
+      <View style={styles.divider} />
+
+      {/* Notes */}
+      <SectionHeader icon="file-text" label="NOTES" />
+      <TextInput
+        style={styles.wellTextarea}
+        value={event.description}
+        onChangeText={(value) => {
+          dispatch({ type: 'SELECT_EVENT', payload: index });
+          handleFieldUpdate('description', value);
+        }}
+        placeholder="Add notes (optional)"
+        placeholderTextColor="#C9B3B3"
+        multiline
+        numberOfLines={3}
+      />
+
+      <View style={styles.divider} />
+
+      {/* Reminder */}
+      <SectionHeader icon="bell" label="REMINDER" />
+      <View style={styles.pillWrap}>
+        <NotificationOption
+          value="none"
+          label="None"
+          selected={event.notification === 'none'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('notification', value);
+          }}
+        />
+        <NotificationOption
+          value="10min"
+          label="10 min"
+          selected={event.notification === '10min'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('notification', value);
+          }}
+        />
+        <NotificationOption
+          value="1hr"
+          label="1 hour"
+          selected={event.notification === '1hr'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('notification', value);
+          }}
+        />
+        <NotificationOption
+          value="1day"
+          label="1 day"
+          selected={event.notification === '1day'}
+          onPress={(value) => {
+            dispatch({ type: 'SELECT_EVENT', payload: index });
+            handleFieldUpdate('notification', value);
+          }}
+        />
       </View>
     </View>
   );
@@ -819,118 +824,118 @@ const styles = StyleSheet.create({
   },
   eventCard: {
     backgroundColor: '#FFF0F0',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    padding: 24,
+    borderRadius: 20,
+    padding: 22,
     marginVertical: 8,
-    shadowColor: '#000',
+    shadowColor: '#8A5A5A',
     shadowOffset: {
       width: 0,
-      height: 2,
+      height: 6,
     },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  cardSection: {
-    marginBottom: 24,
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 3,
   },
   titleInput: {
-    fontSize: 32,
+    fontSize: 26,
     fontWeight: '700',
-    color: '#000000',
+    color: '#1A1A1A',
     backgroundColor: 'transparent',
     padding: 0,
     margin: 0,
-    minHeight: 40,
-    letterSpacing: -0.8,
+    minHeight: 34,
+    lineHeight: 32,
+    letterSpacing: -0.6,
   },
-  sectionLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#6B6B6B',
-    marginBottom: 8,
-    letterSpacing: -0.1,
-    textTransform: 'uppercase',
+  divider: {
+    height: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.06)',
+    marginVertical: 18,
   },
-  dateTimeRow: {
+  labelRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
   },
-  dateTimeItem: {
+  labelIcon: {
+    marginRight: 6,
+  },
+  fieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#9A8585',
+    letterSpacing: 0.6,
+  },
+  whenCard: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  whenCol: {
     flex: 1,
-    marginHorizontal: 6,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
-  dateTimeButton: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#D0D0D0',
+  whenDivider: {
+    width: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.07)',
+    marginVertical: 12,
   },
-  dateTimeValue: {
+  whenValue: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#000000',
-    letterSpacing: -0.4,
+    color: '#1A1A1A',
+    letterSpacing: -0.3,
   },
-  locationInput: {
+  wellInput: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#D0D0D0',
-    padding: 16,
-    fontSize: 17,
-    fontWeight: '400',
-    color: '#000000',
-    letterSpacing: -0.4,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#1A1A1A',
+    letterSpacing: -0.3,
   },
-  descriptionInput: {
+  wellTextarea: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#D0D0D0',
-    padding: 16,
-    fontSize: 17,
-    fontWeight: '400',
-    color: '#000000',
-    height: 88,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingTop: 13,
+    paddingBottom: 13,
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#1A1A1A',
+    height: 84,
     textAlignVertical: 'top',
-    letterSpacing: -0.4,
+    letterSpacing: -0.3,
   },
-  pillsContainer: {
+  pillWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 12,
+    gap: 10,
   },
-  durationGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  notificationPill: {
+  pill: {
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#D0D0D0',
-    minWidth: '30%',
+    borderColor: 'rgba(0, 0, 0, 0.04)',
     alignItems: 'center',
   },
-  selectedPill: {
-    backgroundColor: '#000000',
-    borderColor: '#000000',
+  pillSelected: {
+    backgroundColor: '#FF6B6B',
+    borderColor: '#FF6B6B',
   },
   pillText: {
-    fontSize: 15,
-    color: '#000000',
-    fontWeight: '500',
+    fontSize: 14,
+    color: '#5A4A4A',
+    fontWeight: '600',
     letterSpacing: -0.2,
   },
-  selectedPillText: {
+  pillTextSelected: {
     color: '#FFFFFF',
   },
   pageIndicators: {
