@@ -121,12 +121,22 @@ export const extractTextFromImage = async (imageUri) => {
  * Extract text from image and parse it into structured event data using GPT-4o-mini
  * This is the new AI-powered pipeline that replaces regex-based parsing
  */
-export const extractAndParseEvent = async (imageUri) => {
+export const extractAndParseEvent = async (imageUri, onProgress) => {
+  // Report a pipeline stage to the UI loader (no-op if no callback / on error).
+  const report = (stage) => {
+    try {
+      if (onProgress) onProgress(stage);
+    } catch (e) {
+      // progress reporting must never break the pipeline
+    }
+  };
+
   try {
     log('===== STARTING GPT-POWERED EVENT EXTRACTION =====');
     log('GPT Pipeline: Processing image:', imageUri);
 
     // Step 1: Extract raw text using Vision API
+    report('analyzing');
     log('GPT Pipeline: Step 1 - Extracting text via Vision API...');
     const rawText = await extractTextFromImage(imageUri);
 
@@ -140,6 +150,7 @@ export const extractAndParseEvent = async (imageUri) => {
 
     // Step 2: Parse event details using GPT-4o-mini
     try {
+      report('extracting');
       log('GPT Pipeline: Step 2 - Calling GPT-4o-mini for structured parsing...');
 
       // Send the user's LOCAL date so the backend can resolve relative dates
@@ -167,6 +178,7 @@ export const extractAndParseEvent = async (imageUri) => {
       }
 
       const result = await response.json();
+      report('organizing');
       log('GPT Pipeline: ✓ GPT parsing response received');
 
       // Handle both new format (events array) and old format (single event)

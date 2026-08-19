@@ -20,6 +20,7 @@ import { saveEventToCalendar } from '../utils/calendarService';
 import { incrementScanCount, getRemainingScans } from '../utils/purchaseService';
 import { log, error as logError } from '../utils/logger';
 import SuccessAnimation from '../components/SuccessAnimation';
+import AnalyzingLoader from '../components/AnalyzingLoader';
 
 export default function EventEditorScreen({ navigation }) {
   const { state, dispatch } = useEvent();
@@ -30,6 +31,7 @@ export default function EventEditorScreen({ navigation }) {
   const [isSaving, setIsSaving] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
   const [processError, setProcessError] = useState(null);
+  const [stage, setStage] = useState('analyzing'); // live OCR pipeline stage for the loader
   // Success celebration overlay. `success.next` runs after the animation finishes.
   const [success, setSuccess] = useState(null); // { mode, title, next }
 
@@ -71,6 +73,7 @@ export default function EventEditorScreen({ navigation }) {
     try {
       log('Starting image processing...');
       setProcessError(null);
+      setStage('analyzing');
       dispatch({ type: 'SET_PROCESSING', payload: true });
 
       const uri = state.capturedImage?.uri;
@@ -80,7 +83,7 @@ export default function EventEditorScreen({ navigation }) {
 
       // Race the pipeline against a timeout so a stalled request can't hang the UI.
       const parsedEvents = await Promise.race([
-        extractAndParseEvent(uri),
+        extractAndParseEvent(uri, setStage),
         new Promise((_, reject) =>
           setTimeout(
             () => reject(Object.assign(
@@ -493,12 +496,7 @@ export default function EventEditorScreen({ navigation }) {
   };
 
   if (state.isProcessing) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Reading your poster…</Text>
-      </View>
-    );
+    return <AnalyzingLoader stage={stage} />;
   }
 
   if (processError) {
@@ -702,18 +700,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#FAFAFA',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#FAFAFA',
-  },
-  loadingText: {
-    marginTop: 16,
-    fontSize: 17,
-    fontWeight: '400',
-    color: '#6B6B6B',
   },
   errorContainer: {
     flex: 1,
