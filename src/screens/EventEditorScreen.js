@@ -1,32 +1,41 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, 
-  Text, 
-  TextInput, 
-  TouchableOpacity, 
-  StyleSheet, 
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
   ScrollView,
   Alert,
   ActivityIndicator,
   Dimensions,
-  Platform
+  Platform,
+  Keyboard
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as Haptics from 'expo-haptics';
 import { useEvent } from '../context/EventContext';
-import { extractAndParseEvent } from '../utils/ocrService';
+import { extractAndParseEvent, OCR_ERROR } from '../utils/ocrService';
 import { saveEventToCalendar } from '../utils/calendarService';
 import { incrementScanCount, getRemainingScans } from '../utils/purchaseService';
+import { log, error as logError } from '../utils/logger';
+import SuccessAnimation from '../components/SuccessAnimation';
 
 export default function EventEditorScreen({ navigation }) {
   const { state, dispatch } = useEvent();
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showCustomDuration, setShowCustomDuration] = useState(false);
+  const [customDurationValue, setCustomDurationValue] = useState(15); // Default to 15 minutes
   const [isSaving, setIsSaving] = useState(false);
   const [currentPage, setCurrentPage] = useState(0);
+  const [processError, setProcessError] = useState(null);
+  // Success celebration overlay. `success.next` runs after the animation finishes.
+  const [success, setSuccess] = useState(null); // { mode, title, next }
 
   useEffect(() => {
     if (state.capturedImage) {
-      console.log('New image detected, processing...');
+      log('New image detected, processing...');
       processImage();
     }
     
@@ -59,79 +68,81 @@ export default function EventEditorScreen({ navigation }) {
   }, []);
 
   const processImage = async () => {
-    let timeoutId;
     try {
-      console.log('Starting image processing...');
+      log('Starting image processing...');
+      setProcessError(null);
       dispatch({ type: 'SET_PROCESSING', payload: true });
-      
-      // Set a timeout to prevent infinite processing
-      timeoutId = setTimeout(() => {
-        throw new Error('Image processing timeout');
-      }, 30000); // 30 second timeout
-      
-      console.log('Captured image data:', state.capturedImage);
-      console.log('Image URI:', state.capturedImage?.uri);
-      
-      if (!state.capturedImage?.uri) {
-        throw new Error('No image URI available');
+
+      const uri = state.capturedImage?.uri;
+      if (!uri) {
+        throw Object.assign(new Error('No image was captured.'), { type: OCR_ERROR.INVALID });
       }
-      
-      // Validate the image URI format
-      const uri = state.capturedImage.uri;
-      if (!uri.startsWith('file://') && !uri.startsWith('content://') && !uri.startsWith('assets-library://')) {
-        console.warn('Unexpected image URI format:', uri);
-      }
-      
-      console.log('Calling GPT-powered event extraction pipeline...');
+
+      // Race the pipeline against a timeout so a stalled request can't hang the UI.
       const parsedEvents = await Promise.race([
         extractAndParseEvent(uri),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Event extraction timeout')), 25000)
+          setTimeout(
+            () => reject(Object.assign(
+              new Error('This is taking longer than expected. Please try again.'),
+              { type: OCR_ERROR.NETWORK }
+            )),
+            25000
+          )
         )
       ]);
-      console.log('Event extraction completed');
+      log('Event extraction completed');
 
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
-      // Validate parsed events
       if (!Array.isArray(parsedEvents) || parsedEvents.length === 0) {
-        throw new Error('No valid events found in image');
+        throw Object.assign(
+          new Error("We couldn't find an event on this poster."),
+          { type: OCR_ERROR.NO_TEXT }
+        );
       }
-      
-      // parseEventDetails now returns an array of events
+
       dispatch({ type: 'SET_MULTIPLE_EVENTS', payload: parsedEvents });
-      console.log(`Event data set successfully - ${parsedEvents.length} event(s) found`);
-      
-    } catch (error) {
-      console.error('Processing error:', error);
-      console.error('Error details:', error.message);
-      
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
-      // Create fallback event
-      const fallbackEvent = [{
-        title: 'Manual Entry Required',
-        date: new Date(),
-        location: '',
-        description: 'Please enter event details manually',
-        notification: '1hr'
-      }];
-      
-      dispatch({ type: 'SET_MULTIPLE_EVENTS', payload: fallbackEvent });
-      dispatch({ type: 'SET_ERROR', payload: error.message || 'Failed to process image' });
-      
-      Alert.alert(
-        'Image Processing Failed', 
-        'Could not extract text from image. Please enter event details manually.',
-        [{ text: 'OK', style: 'default' }]
-      );
+      log(`Event data set successfully - ${parsedEvents.length} event(s) found`);
+    } catch (err) {
+      logError('Processing error:', err.message);
+      setProcessError({
+        type: err.type || OCR_ERROR.INVALID,
+        message: err.message || 'Something went wrong reading this poster.',
+      });
     } finally {
       dispatch({ type: 'SET_PROCESSING', payload: false });
     }
+  };
+
+  // Retry the OCR pipeline on the same captured image.
+  const handleRetry = () => {
+    if (state.capturedImage?.uri) {
+      processImage();
+    } else {
+      navigation.navigate('Camera');
+    }
+  };
+
+  // Runs once the success animation finishes: perform the deferred navigation.
+  const handleSuccessComplete = () => {
+    const next = success && success.next;
+    setSuccess(null);
+    if (next) next();
+  };
+
+  // Let the user skip OCR and fill in a blank event by hand.
+  const handleManualEntry = () => {
+    setProcessError(null);
+    dispatch({
+      type: 'SET_MULTIPLE_EVENTS',
+      payload: [{
+        title: '',
+        date: new Date(),
+        location: '',
+        description: '',
+        duration: '60',
+        notification: '1hr',
+      }],
+    });
   };
 
   const handleFieldUpdate = (field, value) => {
@@ -159,6 +170,25 @@ export default function EventEditorScreen({ navigation }) {
       newDate.setMinutes(selectedTime.getMinutes());
       handleFieldUpdate('date', newDate);
     }
+  };
+
+  const handleCustomDurationChange = (event, selectedDuration) => {
+    // For countdown mode, extract hours and minutes from LOCAL time (not UTC)
+    // This avoids timezone conversion issues that corrupt the duration
+    if (selectedDuration) {
+      const hours = selectedDuration.getHours();
+      const minutes = selectedDuration.getMinutes();
+      const durationInMinutes = hours * 60 + minutes;
+      log(`Custom duration selected: ${hours}h ${minutes}m = ${durationInMinutes} minutes`);
+      setCustomDurationValue(Math.max(1, durationInMinutes)); // Ensure at least 1 minute
+    }
+  };
+
+  const handleCustomDurationDone = () => {
+    // Commit the buffered value to event state when Done is tapped
+    log('Committing custom duration:', customDurationValue);
+    handleFieldUpdate('duration', customDurationValue.toString());
+    setShowCustomDuration(false);
   };
 
   const formatDate = (date) => {
@@ -201,22 +231,39 @@ export default function EventEditorScreen({ navigation }) {
       const success = await saveEventToCalendar(currentEvent);
 
       if (success) {
-        Alert.alert(
-          'Success',
-          'Event saved to calendar!',
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                dispatch({ type: 'RESET_EVENT' });
-                navigation.navigate('Landing');
-              }
-            }
-          ]
-        );
+        const savedTitle = currentEvent.title;
+        // Remove the saved event from the array
+        const updatedEvents = state.events.filter((_, idx) => idx !== state.currentEventIndex);
+
+        if (updatedEvents.length > 0) {
+          // More events to review — brief celebration, then advance to the next.
+          const newIndex = state.currentEventIndex >= updatedEvents.length
+            ? updatedEvents.length - 1
+            : state.currentEventIndex;
+
+          setSuccess({
+            mode: 'brief',
+            title: savedTitle,
+            next: () => {
+              dispatch({ type: 'SET_MULTIPLE_EVENTS', payload: updatedEvents });
+              dispatch({ type: 'SELECT_EVENT', payload: newIndex });
+              setCurrentPage(newIndex);
+            },
+          });
+        } else {
+          // Last event saved — full celebration, then fade home for the next input.
+          setSuccess({
+            mode: 'full',
+            title: savedTitle,
+            next: () => {
+              dispatch({ type: 'RESET_EVENT' });
+              navigation.navigate('Landing');
+            },
+          });
+        }
       }
     } catch (error) {
-      console.error('Save error:', error);
+      logError('Save error:', error);
       Alert.alert('Error', 'Failed to save event to calendar');
     } finally {
       setIsSaving(false);
@@ -245,6 +292,9 @@ export default function EventEditorScreen({ navigation }) {
           placeholder="Event Title"
           placeholderTextColor="#999"
           multiline
+          returnKeyType="done"
+          blurOnSubmit
+          onSubmitEditing={() => Keyboard.dismiss()}
         />
       </View>
 
@@ -287,7 +337,7 @@ export default function EventEditorScreen({ navigation }) {
       {/* Duration Section */}
       <View style={styles.cardSection}>
         <Text style={styles.sectionLabel}>Duration</Text>
-        <View style={styles.pillsContainer}>
+        <View style={styles.durationGrid}>
           <NotificationOption
             value="15"
             label="15 min"
@@ -316,21 +366,33 @@ export default function EventEditorScreen({ navigation }) {
             }}
           />
           <NotificationOption
-            value="90"
-            label="1.5 hours"
-            selected={event.duration === '90'}
-            onPress={(value) => {
-              dispatch({ type: 'SELECT_EVENT', payload: index });
-              handleFieldUpdate('duration', value);
-            }}
-          />
-          <NotificationOption
             value="120"
             label="2 hours"
             selected={event.duration === '120'}
             onPress={(value) => {
               dispatch({ type: 'SELECT_EVENT', payload: index });
               handleFieldUpdate('duration', value);
+            }}
+          />
+          <NotificationOption
+            value="1440"
+            label="All day"
+            selected={event.duration === '1440'}
+            onPress={(value) => {
+              dispatch({ type: 'SELECT_EVENT', payload: index });
+              handleFieldUpdate('duration', value);
+            }}
+          />
+          <NotificationOption
+            value="custom"
+            label="Custom"
+            selected={event.duration && !['15', '30', '60', '120', '1440'].includes(event.duration)}
+            onPress={() => {
+              dispatch({ type: 'SELECT_EVENT', payload: index });
+              // Initialize local state with current duration, default to 15 minutes
+              const currentDuration = parseInt(event.duration || '15');
+              setCustomDurationValue(currentDuration);
+              setShowCustomDuration(true);
             }}
           />
         </View>
@@ -348,6 +410,8 @@ export default function EventEditorScreen({ navigation }) {
           }}
           placeholder="Add location"
           placeholderTextColor="#999"
+          returnKeyType="done"
+          onSubmitEditing={() => Keyboard.dismiss()}
         />
       </View>
 
@@ -416,6 +480,14 @@ export default function EventEditorScreen({ navigation }) {
   const handleScroll = (event) => {
     const { contentOffset, layoutMeasurement } = event.nativeEvent;
     const pageIndex = Math.round(contentOffset.x / layoutMeasurement.width);
+
+    // Add haptic feedback when page changes
+    if (pageIndex !== currentPage) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {
+        // Ignore haptics errors (e.g., on devices without haptic support)
+      });
+    }
+
     setCurrentPage(pageIndex);
     dispatch({ type: 'SELECT_EVENT', payload: pageIndex });
   };
@@ -424,7 +496,50 @@ export default function EventEditorScreen({ navigation }) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#007AFF" />
-        <Text style={styles.loadingText}>Processing image...</Text>
+        <Text style={styles.loadingText}>Reading your poster…</Text>
+      </View>
+    );
+  }
+
+  if (processError) {
+    const errorContent = {
+      [OCR_ERROR.NETWORK]: { emoji: '📡', title: 'Connection problem' },
+      [OCR_ERROR.SERVER]: { emoji: '🛠️', title: 'Server hiccup' },
+      [OCR_ERROR.NO_TEXT]: { emoji: '🔍', title: 'No event found' },
+      [OCR_ERROR.INVALID]: { emoji: '📷', title: "Couldn't read this poster" },
+    }[processError.type] || { emoji: '📷', title: "Couldn't read this poster" };
+
+    return (
+      <View style={styles.errorContainer}>
+        <Text style={styles.errorEmoji}>{errorContent.emoji}</Text>
+        <Text style={styles.errorTitle}>{errorContent.title}</Text>
+        <Text style={styles.errorMessage}>{processError.message}</Text>
+
+        <View style={styles.errorActions}>
+          <TouchableOpacity
+            style={styles.errorPrimaryButton}
+            onPress={handleRetry}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.errorPrimaryText}>Try Again</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.errorSecondaryButton}
+            onPress={handleManualEntry}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.errorSecondaryText}>Enter Manually</Text>
+          </TouchableOpacity>
+        </View>
+
+        <TouchableOpacity
+          style={styles.errorBackButton}
+          onPress={() => navigation.navigate('Landing')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.errorBackText}>Back to Home</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -469,6 +584,7 @@ export default function EventEditorScreen({ navigation }) {
             style={styles.cardScrollView}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
           >
             {renderEventCard(event, index)}
           </ScrollView>
@@ -542,6 +658,40 @@ export default function EventEditorScreen({ navigation }) {
           </View>
         </View>
       )}
+
+      {/* Custom Duration Picker */}
+      {showCustomDuration && (
+        <View style={styles.pickerOverlay}>
+          <View style={styles.pickerContainer}>
+            <View style={styles.pickerHeader}>
+              <TouchableOpacity onPress={handleCustomDurationDone}>
+                <Text style={styles.pickerDone}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <DateTimePicker
+              value={(() => {
+                // Convert minutes to local Date with hours/minutes components
+                // This avoids timezone issues (Jan 1, 1970 is arbitrary base date)
+                const hours = Math.floor(customDurationValue / 60);
+                const minutes = customDurationValue % 60;
+                return new Date(1970, 0, 1, hours, minutes, 0, 0);
+              })()}
+              mode="countdown"
+              display="spinner"
+              onChange={handleCustomDurationChange}
+              minuteInterval={15}
+            />
+          </View>
+        </View>
+      )}
+
+      {/* Success celebration overlay (renders above everything) */}
+      <SuccessAnimation
+        visible={!!success}
+        mode={success ? success.mode : 'full'}
+        title={success ? success.title : ''}
+        onComplete={handleSuccessComplete}
+      />
     </View>
   );
 }
@@ -564,6 +714,74 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '400',
     color: '#6B6B6B',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#FAFAFA',
+    paddingHorizontal: 40,
+  },
+  errorEmoji: {
+    fontSize: 52,
+    marginBottom: 20,
+  },
+  errorTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#000000',
+    textAlign: 'center',
+    letterSpacing: -0.5,
+    marginBottom: 10,
+  },
+  errorMessage: {
+    fontSize: 16,
+    fontWeight: '400',
+    color: '#6B6B6B',
+    textAlign: 'center',
+    lineHeight: 22,
+    letterSpacing: -0.2,
+    marginBottom: 36,
+  },
+  errorActions: {
+    width: '100%',
+    gap: 12,
+  },
+  errorPrimaryButton: {
+    backgroundColor: '#000000',
+    paddingVertical: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  errorPrimaryText: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '600',
+    letterSpacing: -0.4,
+  },
+  errorSecondaryButton: {
+    backgroundColor: 'transparent',
+    paddingVertical: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#D0D0D0',
+  },
+  errorSecondaryText: {
+    color: '#000000',
+    fontSize: 17,
+    fontWeight: '600',
+    letterSpacing: -0.4,
+  },
+  errorBackButton: {
+    marginTop: 24,
+    padding: 8,
+  },
+  errorBackText: {
+    color: '#6B6B6B',
+    fontSize: 15,
+    fontWeight: '500',
+    letterSpacing: -0.2,
   },
   header: {
     paddingTop: 60,
@@ -701,6 +919,11 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 12,
   },
+  durationGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
   notificationPill: {
     backgroundColor: '#FFFFFF',
     paddingHorizontal: 20,
@@ -708,6 +931,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#D0D0D0',
+    minWidth: '30%',
+    alignItems: 'center',
   },
   selectedPill: {
     backgroundColor: '#000000',
@@ -728,13 +953,14 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
   },
   indicator: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: '#D0D0D0',
     marginHorizontal: 5,
   },
   activeIndicator: {
+    width: 24,
     backgroundColor: '#000000',
   },
   saveButtonContainer: {

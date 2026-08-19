@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IAP from 'react-native-iap';
 import { Platform } from 'react-native';
+import { log, error as logError } from './logger';
 
 // Product IDs (must match what you set up in App Store Connect)
 const PRODUCT_IDS = Platform.select({
@@ -21,12 +22,12 @@ const FREE_SCANS_PER_MONTH = 3;
 export const initIAP = async () => {
   try {
     await IAP.initConnection();
-    console.log('IAP: Connection initialized');
+    log('IAP: Connection initialized');
 
     // Check if user has purchased Pro
     await checkPurchaseStatus();
   } catch (error) {
-    console.error('IAP: Failed to initialize:', error);
+    logError('IAP: Failed to initialize:', error);
   }
 };
 
@@ -36,9 +37,9 @@ export const initIAP = async () => {
 export const endIAP = async () => {
   try {
     await IAP.endConnection();
-    console.log('IAP: Connection ended');
+    log('IAP: Connection ended');
   } catch (error) {
-    console.error('IAP: Failed to end connection:', error);
+    logError('IAP: Failed to end connection:', error);
   }
 };
 
@@ -50,7 +51,7 @@ export const checkIsPro = async () => {
     const isPro = await AsyncStorage.getItem(PRO_STATUS_KEY);
     return isPro === 'true';
   } catch (error) {
-    console.error('IAP: Error checking Pro status:', error);
+    logError('IAP: Error checking Pro status:', error);
     return false;
   }
 };
@@ -76,7 +77,7 @@ export const getRemainingScans = async () => {
     const remaining = FREE_SCANS_PER_MONTH - scanCount;
     return Math.max(0, remaining);
   } catch (error) {
-    console.error('IAP: Error getting remaining scans:', error);
+    logError('IAP: Error getting remaining scans:', error);
     return 0;
   }
 };
@@ -101,10 +102,10 @@ export const incrementScanCount = async () => {
     }
 
     await AsyncStorage.setItem(SCAN_LIMIT_KEY, String(scanCount + 1));
-    console.log(`IAP: Scan count incremented to ${scanCount + 1}`);
+    log(`IAP: Scan count incremented to ${scanCount + 1}`);
     return true;
   } catch (error) {
-    console.error('IAP: Error incrementing scan count:', error);
+    logError('IAP: Error incrementing scan count:', error);
     return false;
   }
 };
@@ -122,10 +123,10 @@ const resetMonthlyScansIfNeeded = async () => {
       // New month - reset counter
       await AsyncStorage.setItem(SCAN_LIMIT_KEY, '0');
       await AsyncStorage.setItem(SCAN_RESET_KEY, currentMonth);
-      console.log('IAP: Monthly scan counter reset');
+      log('IAP: Monthly scan counter reset');
     }
   } catch (error) {
-    console.error('IAP: Error resetting monthly scans:', error);
+    logError('IAP: Error resetting monthly scans:', error);
   }
 };
 
@@ -134,11 +135,11 @@ const resetMonthlyScansIfNeeded = async () => {
  */
 export const purchasePro = async () => {
   try {
-    console.log('IAP: Starting purchase flow...');
+    log('IAP: Starting purchase flow...');
 
     // Get products
     const products = await IAP.getProducts({ skus: PRODUCT_IDS });
-    console.log('IAP: Available products:', products);
+    log('IAP: Available products:', products);
 
     if (!products || products.length === 0) {
       throw new Error('No products available');
@@ -148,14 +149,14 @@ export const purchasePro = async () => {
     const productId = PRODUCT_IDS[0];
     await IAP.requestPurchase({ sku: productId });
 
-    console.log('IAP: Purchase successful!');
+    log('IAP: Purchase successful!');
     return true;
   } catch (error) {
-    console.error('IAP: Purchase failed:', error);
+    logError('IAP: Purchase failed:', error);
 
     // User cancelled
     if (error.code === 'E_USER_CANCELLED') {
-      console.log('IAP: User cancelled purchase');
+      log('IAP: User cancelled purchase');
       return false;
     }
 
@@ -168,10 +169,10 @@ export const purchasePro = async () => {
  */
 export const restorePurchases = async () => {
   try {
-    console.log('IAP: Restoring purchases...');
+    log('IAP: Restoring purchases...');
 
     const purchases = await IAP.getAvailablePurchases();
-    console.log('IAP: Available purchases:', purchases);
+    log('IAP: Available purchases:', purchases);
 
     // Check if user has purchased Pro
     const hasPro = purchases.some(purchase =>
@@ -180,14 +181,14 @@ export const restorePurchases = async () => {
 
     if (hasPro) {
       await AsyncStorage.setItem(PRO_STATUS_KEY, 'true');
-      console.log('IAP: Pro status restored');
+      log('IAP: Pro status restored');
       return true;
     }
 
-    console.log('IAP: No purchases to restore');
+    log('IAP: No purchases to restore');
     return false;
   } catch (error) {
-    console.error('IAP: Error restoring purchases:', error);
+    logError('IAP: Error restoring purchases:', error);
     return false;
   }
 };
@@ -206,7 +207,7 @@ export const checkPurchaseStatus = async () => {
     // If not found locally, check with store
     return await restorePurchases();
   } catch (error) {
-    console.error('IAP: Error checking purchase status:', error);
+    logError('IAP: Error checking purchase status:', error);
     return false;
   }
 };
@@ -217,7 +218,7 @@ export const checkPurchaseStatus = async () => {
 export const setupPurchaseListener = () => {
   const purchaseUpdateSubscription = IAP.purchaseUpdatedListener(
     async (purchase) => {
-      console.log('IAP: Purchase update:', purchase);
+      log('IAP: Purchase update:', purchase);
 
       const receipt = purchase.transactionReceipt;
       if (receipt) {
@@ -231,10 +232,10 @@ export const setupPurchaseListener = () => {
 
           // Mark user as Pro
           await AsyncStorage.setItem(PRO_STATUS_KEY, 'true');
-          console.log('IAP: Purchase completed and saved!');
+          log('IAP: Purchase completed and saved!');
 
         } catch (error) {
-          console.error('IAP: Error finishing transaction:', error);
+          logError('IAP: Error finishing transaction:', error);
         }
       }
     }
@@ -242,7 +243,7 @@ export const setupPurchaseListener = () => {
 
   const purchaseErrorSubscription = IAP.purchaseErrorListener(
     (error) => {
-      console.error('IAP: Purchase error:', error);
+      logError('IAP: Purchase error:', error);
     }
   );
 

@@ -1,5 +1,7 @@
 import * as Calendar from 'expo-calendar';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { log, error as logError } from './logger';
 
 export const requestCalendarPermissions = async () => {
   try {
@@ -11,7 +13,7 @@ export const requestCalendarPermissions = async () => {
       return status === 'granted';
     }
   } catch (error) {
-    console.error('Permission request error:', error);
+    logError('Permission request error:', error);
     return false;
   }
 };
@@ -19,16 +21,104 @@ export const requestCalendarPermissions = async () => {
 export const getDefaultCalendar = async () => {
   try {
     const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-    
+
     // Look for the default calendar
     const defaultCalendar = calendars.find(
       cal => cal.source?.name === 'Default' || cal.isPrimary || cal.allowsModifications
     );
-    
+
     return defaultCalendar || calendars[0];
   } catch (error) {
-    console.error('Error getting calendars:', error);
+    logError('Error getting calendars:', error);
     throw error;
+  }
+};
+
+export const findOrCreateCalendarOCRCalendar = async () => {
+  try {
+    // Check if we have a cached calendar ID
+    const cachedCalendarId = await AsyncStorage.getItem('@calendarocr_calendar_id');
+
+    // Get all calendars
+    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+
+    // First, try to find existing CalendarOCR calendar by cached ID
+    if (cachedCalendarId) {
+      const cachedCalendar = calendars.find(cal => cal.id === cachedCalendarId);
+      if (cachedCalendar) {
+        log('Found cached CalendarOCR calendar:', cachedCalendarId);
+        return cachedCalendar;
+      }
+      // Cached calendar no longer exists (e.g. user deleted it) — drop the stale
+      // id so we don't keep referencing it, then fall through to find/create.
+      log('Cached calendar no longer exists, clearing stale id');
+      await AsyncStorage.removeItem('@calendarocr_calendar_id');
+    }
+
+    // Try to find CalendarOCR calendar by title
+    const existingCalendar = calendars.find(cal =>
+      cal.title === 'CalendarOCR' && cal.allowsModifications
+    );
+
+    if (existingCalendar) {
+      log('Found existing CalendarOCR calendar:', existingCalendar.id);
+      await AsyncStorage.setItem('@calendarocr_calendar_id', existingCalendar.id);
+      return existingCalendar;
+    }
+
+    // If not found, create a new CalendarOCR calendar
+    log('Creating new CalendarOCR calendar...');
+
+    // Get the default source for calendar creation
+    let defaultSource;
+    if (Platform.OS === 'ios') {
+      const sources = await Calendar.getSourcesAsync();
+      defaultSource = sources.find(source => source.type === Calendar.SourceType.CALDAV || source.type === Calendar.SourceType.LOCAL);
+
+      if (!defaultSource) {
+        defaultSource = sources[0]; // Fallback to first available source
+      }
+    } else {
+      // Android
+      const sources = await Calendar.getSourcesAsync();
+      defaultSource = sources.find(source => source.type === Calendar.SourceType.LOCAL);
+
+      if (!defaultSource) {
+        defaultSource = sources[0];
+      }
+    }
+
+    if (!defaultSource) {
+      throw new Error('No calendar source available for creating calendar');
+    }
+
+    // Create the calendar
+    const newCalendarId = await Calendar.createCalendarAsync({
+      title: 'CalendarOCR',
+      color: '#FF6B6B', // Pink/salmon color to match app theme
+      entityType: Calendar.EntityTypes.EVENT,
+      sourceId: defaultSource.id,
+      source: defaultSource,
+      name: 'CalendarOCR',
+      ownerAccount: 'personal',
+      accessLevel: Calendar.CalendarAccessLevel.OWNER,
+    });
+
+    log('Created new CalendarOCR calendar with ID:', newCalendarId);
+
+    // Cache the new calendar ID
+    await AsyncStorage.setItem('@calendarocr_calendar_id', newCalendarId);
+
+    // Retrieve and return the newly created calendar
+    const updatedCalendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const newCalendar = updatedCalendars.find(cal => cal.id === newCalendarId);
+
+    return newCalendar;
+  } catch (error) {
+    logError('Error finding/creating CalendarOCR calendar:', error);
+    // Fallback to default calendar if creation fails
+    log('Falling back to default calendar');
+    return await getDefaultCalendar();
   }
 };
 
@@ -40,8 +130,8 @@ export const saveEventToCalendar = async (eventData) => {
       throw new Error('Calendar permission denied');
     }
 
-    // Get the default calendar
-    const calendar = await getDefaultCalendar();
+    // Get or create the CalendarOCR calendar
+    const calendar = await findOrCreateCalendarOCRCalendar();
     if (!calendar) {
       throw new Error('No calendar available');
     }
@@ -68,10 +158,10 @@ export const saveEventToCalendar = async (eventData) => {
     // Create the event
     const eventId = await Calendar.createEventAsync(calendar.id, eventDetails);
     
-    console.log('Event created with ID:', eventId);
+    log('Event created with ID:', eventId);
     return true;
   } catch (error) {
-    console.error('Error saving event:', error);
+    logError('Error saving event:', error);
     throw error;
   }
 };
@@ -100,7 +190,7 @@ export const getAvailableCalendars = async () => {
     const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
     return calendars.filter(cal => cal.allowsModifications);
   } catch (error) {
-    console.error('Error getting calendars:', error);
+    logError('Error getting calendars:', error);
     return [];
   }
 };

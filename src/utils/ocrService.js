@@ -1,110 +1,56 @@
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system';
-import { Image } from 'react-native';
+import { log, warn, error as logError } from './logger';
+import { APP_API_KEY } from './config';
+import { parseEventDetails } from './eventParsing';
+
+// Re-export so existing importers of parseEventDetails from this module keep working.
+export { parseEventDetails };
 
 // Backend API URLs - Your Vercel deployment
 const BACKEND_API_URL = 'https://calendar-ocr-backend.vercel.app/api/ocr';
 const PARSE_EVENT_API_URL = 'https://calendar-ocr-backend.vercel.app/api/parse-event';
 
-// Focus frame coordinates matching the camera UI
-// These match the focusArea in CameraScreen.js (top:20%, left:10%, right:10%, bottom:30%)
-const FOCUS_FRAME = {
-  top: 0.20,      // 20% from top
-  left: 0.10,     // 10% from left
-  width: 0.80,    // 80% of screen width (100% - 10% - 10%)
-  height: 0.50    // 50% of screen height (100% - 20% - 30%)
-};
-
 /**
- * Get image dimensions
+ * Typed error so the UI can distinguish failure modes (network vs. no-text vs.
+ * server) and show an appropriate, actionable message instead of a blank card.
  */
-const getImageDimensions = (uri) => {
-  return new Promise((resolve, reject) => {
-    Image.getSize(
-      uri,
-      (width, height) => resolve({ width, height }),
-      (error) => reject(error)
-    );
-  });
+export const OCR_ERROR = {
+  NETWORK: 'network',   // couldn't reach the backend
+  SERVER: 'server',     // backend responded with an error
+  NO_TEXT: 'no_text',   // OCR succeeded but found no readable text
+  INVALID: 'invalid',   // bad input / unexpected response
 };
 
+const ocrError = (type, message) => Object.assign(new Error(message), { type, isOcrError: true });
+
 /**
- * Preprocess image for better OCR accuracy
- * - Crop to focus frame area (removes surrounding posters)
- * - Resize to optimal dimensions
- * - Compress for faster upload
+ * Preprocess image for better OCR accuracy.
+ *
+ * We intentionally do NOT crop here. The camera's focus frame is screen-relative
+ * (a CSS overlay), while the captured photo has the sensor's aspect ratio — so a
+ * screen-percentage crop misaligns and can cut off the poster. Sending the full
+ * (resized) frame lets the OCR + GPT pipeline handle framing far more reliably.
+ * The on-screen frame remains purely as capture guidance for the user.
  */
 const preprocessImage = async (imageUri) => {
   try {
-    console.log('OCR: ===== STARTING IMAGE PREPROCESSING =====');
-    console.log('OCR: Input image URI:', imageUri);
-
-    // Get original image dimensions
-    console.log('OCR: Fetching image dimensions...');
-    const { width: imageWidth, height: imageHeight } = await getImageDimensions(imageUri);
-    console.log(`OCR: ✓ Original image dimensions: ${imageWidth}×${imageHeight} (aspect ratio: ${(imageWidth/imageHeight).toFixed(2)})`);
-
-    // Calculate crop region based on focus frame
-    const cropRegion = {
-      originX: Math.round(imageWidth * FOCUS_FRAME.left),
-      originY: Math.round(imageHeight * FOCUS_FRAME.top),
-      width: Math.round(imageWidth * FOCUS_FRAME.width),
-      height: Math.round(imageHeight * FOCUS_FRAME.height)
-    };
-
-    console.log('OCR: Focus frame settings:', FOCUS_FRAME);
-    console.log(`OCR: ✓ Calculated crop region:`, cropRegion);
-    console.log(`OCR:   - Cropping from (${cropRegion.originX}, ${cropRegion.originY})`);
-    console.log(`OCR:   - New size: ${cropRegion.width}×${cropRegion.height}`);
-    console.log(`OCR:   - This removes ${((1 - FOCUS_FRAME.width * FOCUS_FRAME.height) * 100).toFixed(1)}% of the image`);
-
-    // Apply crop and resize operations
-    console.log('OCR: Applying crop and resize...');
+    log('OCR: Preprocessing image (resize + compress, no crop)...');
     const manipulatedImage = await ImageManipulator.manipulateAsync(
       imageUri,
-      [
-        // Step 1: Crop to focus frame area (removes surrounding content)
-        { crop: cropRegion },
-        // Step 2: Resize to max 1600px width to reduce API payload size
-        { resize: { width: 1600 } }
-      ],
+      // Resize to max 1600px width to reduce API payload size
+      [{ resize: { width: 1600 } }],
       {
         compress: 0.7,
         format: ImageManipulator.SaveFormat.JPEG,
       }
     );
-
-    console.log('OCR: ✓ Image preprocessed successfully!');
-    console.log(`OCR:   - Cropped image URI: ${manipulatedImage.uri}`);
-    console.log(`OCR:   - Final dimensions: ${manipulatedImage.width}×${manipulatedImage.height}`);
-    console.log('OCR: ===== PREPROCESSING COMPLETE =====');
-
+    log(`OCR: ✓ Preprocessed to ${manipulatedImage.width}×${manipulatedImage.height}`);
     return manipulatedImage.uri;
-  } catch (error) {
-    console.error('OCR: ✗ Image preprocessing FAILED:', error);
-    console.error('OCR: Error name:', error.name);
-    console.error('OCR: Error message:', error.message);
-    console.error('OCR: Error stack:', error.stack);
-    console.warn('OCR: ⚠️  FALLBACK: Attempting without cropping...');
-
-    // Fallback: Try without cropping
-    try {
-      const fallbackImage = await ImageManipulator.manipulateAsync(
-        imageUri,
-        [{ resize: { width: 1600 } }],
-        {
-          compress: 0.7,
-          format: ImageManipulator.SaveFormat.JPEG,
-        }
-      );
-      console.log('OCR: ✓ Fallback preprocessing successful (resize only - NO CROPPING APPLIED)');
-      console.warn('OCR: ⚠️  WARNING: Full image sent to OCR, may see other posters!');
-      return fallbackImage.uri;
-    } catch (fallbackError) {
-      console.error('OCR: ✗ Fallback preprocessing also failed:', fallbackError);
-      console.error('OCR: Using original image without any processing');
-      return imageUri;
-    }
+  } catch (err) {
+    // Non-fatal: fall back to the original image so OCR can still be attempted.
+    warn('OCR: Preprocessing failed, using original image:', err.message);
+    return imageUri;
   }
 };
 
@@ -112,77 +58,63 @@ const preprocessImage = async (imageUri) => {
  * Extract text from image using Vision API
  */
 export const extractTextFromImage = async (imageUri) => {
+  log('OCR: Processing image for text extraction');
+
+  // Validate input
+  if (!imageUri || typeof imageUri !== 'string') {
+    throw ocrError(OCR_ERROR.INVALID, 'Invalid image URI provided');
+  }
+
+  // Preprocess image for better OCR results
+  const processedUri = await preprocessImage(imageUri);
+
+  // Read image as base64
+  const base64Image = await FileSystem.readAsStringAsync(processedUri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+
+  // Call backend API
+  log('OCR: Calling backend API...');
+  let response;
   try {
-    console.log('OCR: Processing image for text extraction:', imageUri);
-
-    // Validate input
-    if (!imageUri || typeof imageUri !== 'string') {
-      throw new Error('Invalid image URI provided');
-    }
-
-    // Check if backend URL is configured
-    if (!BACKEND_API_URL || BACKEND_API_URL === 'YOUR_VERCEL_URL_HERE/api/ocr') {
-      throw new Error('Backend API URL not configured. Please deploy the backend and update BACKEND_API_URL in ocrService.js');
-    }
-
-    // Preprocess image for better OCR results
-    const processedUri = await preprocessImage(imageUri);
-
-    // Read image as base64
-    console.log('OCR: Reading image file...');
-    const base64Image = await FileSystem.readAsStringAsync(processedUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-
-    // Call backend API
-    console.log('OCR: Calling backend API...');
-    const response = await fetch(BACKEND_API_URL, {
+    response = await fetch(BACKEND_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-app-key': APP_API_KEY,
       },
       body: JSON.stringify({
         image: base64Image,
       }),
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('OCR: Backend API error:', response.status, errorText);
-      throw new Error(`Backend API request failed: ${response.status}`);
-    }
-
-    const result = await response.json();
-    console.log('OCR: ✓ Backend response received');
-
-    // Extract text from backend response
-    if (result.success && result.text !== undefined) {
-      const extractedText = result.text;
-
-      if (extractedText) {
-        console.log('OCR: ✓ Text extraction completed successfully');
-        console.log('OCR: ===== EXTRACTED TEXT START =====');
-        console.log(extractedText);
-        console.log('OCR: ===== EXTRACTED TEXT END =====');
-        console.log(`OCR: Total characters: ${extractedText.length}, Total lines: ${extractedText.split('\n').length}`);
-      } else {
-        console.warn('OCR: ⚠️  No text detected in image');
-      }
-
-      return extractedText;
-    }
-
-    console.warn('OCR: Invalid response format from backend');
-    throw new Error('Invalid response from backend');
-  } catch (error) {
-    console.error('OCR Error details:', error);
-    console.error('OCR Error message:', error.message);
-
-    // Return empty string to trigger manual entry
-    // The EventEditorScreen will handle this gracefully
-    console.log('OCR: Returning empty string due to error');
-    return '';
+  } catch (err) {
+    // fetch() only rejects on network-level failures (no connectivity, DNS, etc.)
+    logError('OCR: Network error calling backend:', err.message);
+    throw ocrError(OCR_ERROR.NETWORK, 'Could not reach the server. Check your connection.');
   }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    logError('OCR: Backend API error:', response.status, errorText);
+    throw ocrError(OCR_ERROR.SERVER, `The server could not process the image (${response.status}).`);
+  }
+
+  const result = await response.json();
+  log('OCR: ✓ Backend response received');
+
+  // Extract text from backend response
+  if (result.success && result.text !== undefined) {
+    const extractedText = result.text;
+    if (extractedText) {
+      log(`OCR: ✓ Text extraction completed (${extractedText.length} chars)`);
+    } else {
+      warn('OCR: No text detected in image');
+    }
+    return extractedText;
+  }
+
+  warn('OCR: Invalid response format from backend');
+  throw ocrError(OCR_ERROR.SERVER, 'Received an unexpected response from the server.');
 };
 
 /**
@@ -191,569 +123,183 @@ export const extractTextFromImage = async (imageUri) => {
  */
 export const extractAndParseEvent = async (imageUri) => {
   try {
-    console.log('===== STARTING GPT-POWERED EVENT EXTRACTION =====');
-    console.log('GPT Pipeline: Processing image:', imageUri);
+    log('===== STARTING GPT-POWERED EVENT EXTRACTION =====');
+    log('GPT Pipeline: Processing image:', imageUri);
 
     // Step 1: Extract raw text using Vision API
-    console.log('GPT Pipeline: Step 1 - Extracting text via Vision API...');
+    log('GPT Pipeline: Step 1 - Extracting text via Vision API...');
     const rawText = await extractTextFromImage(imageUri);
 
     if (!rawText || rawText.trim().length === 0) {
-      console.warn('GPT Pipeline: No text extracted from image, creating fallback event');
-      return createFallbackEvent();
+      warn('GPT Pipeline: No text extracted from image');
+      throw ocrError(OCR_ERROR.NO_TEXT, "We couldn't find any text on this poster.");
     }
 
-    console.log('GPT Pipeline: ✓ Text extraction successful');
-    console.log(`GPT Pipeline: Extracted ${rawText.length} characters of text`);
+    log('GPT Pipeline: ✓ Text extraction successful');
+    log(`GPT Pipeline: Extracted ${rawText.length} characters of text`);
 
     // Step 2: Parse event details using GPT-4o-mini
     try {
-      console.log('GPT Pipeline: Step 2 - Calling GPT-4o-mini for structured parsing...');
+      log('GPT Pipeline: Step 2 - Calling GPT-4o-mini for structured parsing...');
+
+      // Send the user's LOCAL date so the backend can resolve relative dates
+      // ("this Friday", "tonight") against the right day/timezone.
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const localToday = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 
       const response = await fetch(PARSE_EVENT_API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-app-key': APP_API_KEY,
         },
         body: JSON.stringify({
-          text: rawText
+          text: rawText,
+          today: localToday,
         }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('GPT Pipeline: Backend API error:', response.status, errorText);
+        logError('GPT Pipeline: Backend API error:', response.status, errorText);
         throw new Error(`GPT parsing API failed: ${response.status}`);
       }
 
       const result = await response.json();
-      console.log('GPT Pipeline: ✓ GPT parsing response received');
+      log('GPT Pipeline: ✓ GPT parsing response received');
 
-      if (result.success && result.event) {
-        console.log('GPT Pipeline: ✓ Successfully parsed event details');
-        console.log('GPT Pipeline: Event data:', {
-          title: result.event.title,
-          date: result.event.date,
-          time: result.event.time,
-          endTime: result.event.endTime || result.event.end_time || '(empty)',
-          location: result.event.location ? `"${result.event.location}"` : '(empty)',
-          description: result.event.description ? `"${result.event.description.substring(0, 50)}..."` : '(empty)',
-          duration: result.event.duration || '(empty)'
-        });
+      // Handle both new format (events array) and old format (single event)
+      let eventsData = [];
 
-        // Step 3: Convert GPT response (ISO date/time strings) to JavaScript Date object
-        console.log('GPT Pipeline: Step 3 - Converting ISO date/time to Date object...');
-
-        // Combine date and time: "2024-12-25" + "14:30" -> "2024-12-25T14:30"
-        const dateTimeString = `${result.event.date}T${result.event.time}`;
-        const eventDate = new Date(dateTimeString);
-
-        // Validate the date
-        if (isNaN(eventDate.getTime())) {
-          console.error('GPT Pipeline: Invalid date/time from GPT:', dateTimeString);
-          throw new Error('Invalid date/time format from GPT');
-        }
-
-        console.log('GPT Pipeline: ✓ Date conversion successful:', eventDate.toLocaleString());
-
-        // Step 4: Calculate duration from start and end time if available
-        let calculatedDuration = result.event.duration || '60'; // Default to 60 minutes
-
-        const endTime = result.event.endTime || result.event.end_time;
-        if (endTime && !result.event.duration) {
-          console.log('GPT Pipeline: End time detected, calculating duration...');
-          try {
-            // Parse start time (HH:MM format)
-            const [startHour, startMinute] = result.event.time.split(':').map(Number);
-            // Parse end time (HH:MM format)
-            const [endHour, endMinute] = endTime.split(':').map(Number);
-
-            // Calculate total minutes from midnight for both times
-            const startTotalMinutes = startHour * 60 + startMinute;
-            const endTotalMinutes = endHour * 60 + endMinute;
-
-            // Calculate duration in minutes
-            let durationMinutes = endTotalMinutes - startTotalMinutes;
-
-            // Handle cases where event crosses midnight (end time is next day)
-            if (durationMinutes < 0) {
-              durationMinutes += 24 * 60; // Add 24 hours
-            }
-
-            // Validate reasonable duration (between 5 minutes and 24 hours)
-            if (durationMinutes >= 5 && durationMinutes <= 1440) {
-              calculatedDuration = String(durationMinutes);
-              console.log(`GPT Pipeline: ✓ Calculated duration: ${durationMinutes} minutes (${result.event.time} to ${endTime})`);
-            } else {
-              console.warn(`GPT Pipeline: Calculated duration ${durationMinutes} min seems unreasonable, using default`);
-            }
-          } catch (error) {
-            console.error('GPT Pipeline: Error calculating duration:', error);
-            console.log('GPT Pipeline: Using default duration');
-          }
-        }
-
-        // Step 5: Create event object
-        const parsedEvent = {
-          title: result.event.title,
-          date: eventDate,
-          location: result.event.location || '',
-          description: result.event.description || '',
-          duration: calculatedDuration,
-          notification: '1hr'
-        };
-
-        console.log('GPT Pipeline: ===== GPT PARSING COMPLETE - SUCCESS =====');
-        console.log(`GPT Pipeline: Final duration: ${calculatedDuration} minutes`);
-        return [parsedEvent]; // Return array for consistency with parseEventDetails
-
+      if (result.success && result.events && Array.isArray(result.events)) {
+        // New format: multiple events
+        eventsData = result.events;
+        log(`GPT Pipeline: ✓ Successfully parsed ${eventsData.length} event(s)`);
+      } else if (result.success && result.event) {
+        // Old format: single event (backward compatibility)
+        eventsData = [result.event];
+        log('GPT Pipeline: ✓ Successfully parsed event details (legacy format)');
       } else {
-        console.error('GPT Pipeline: Invalid response format from GPT API:', result);
+        logError('GPT Pipeline: Invalid response format from GPT API:', result);
         throw new Error('Invalid response from GPT parsing API');
       }
 
+      // Process each event
+      const parsedEvents = [];
+
+      for (let i = 0; i < eventsData.length; i++) {
+        const eventData = eventsData[i];
+        log(`GPT Pipeline: Processing event ${i + 1}/${eventsData.length}:`, {
+          title: eventData.title,
+          date: eventData.date,
+          time: eventData.time,
+          endTime: eventData.endTime || eventData.end_time || '(empty)',
+          location: eventData.location ? `"${eventData.location}"` : '(empty)',
+          description: eventData.description ? `"${eventData.description.substring(0, 50)}..."` : '(empty)',
+          duration: eventData.duration || '(empty)'
+        });
+
+        try {
+          // Step 3: Convert GPT response (ISO date/time strings) to JavaScript Date object
+          log(`GPT Pipeline: Converting ISO date/time to Date object for event ${i + 1}...`);
+
+          // Combine date and time: "2024-12-25" + "14:30" -> "2024-12-25T14:30"
+          const dateTimeString = `${eventData.date}T${eventData.time}`;
+          const eventDate = new Date(dateTimeString);
+
+          // Validate the date
+          if (isNaN(eventDate.getTime())) {
+            logError(`GPT Pipeline: Invalid date/time from GPT for event ${i + 1}:`, dateTimeString);
+            continue; // Skip this event
+          }
+
+          log(`GPT Pipeline: ✓ Date conversion successful for event ${i + 1}:`, eventDate.toLocaleString());
+
+          // Step 4: Calculate duration from start and end time if available
+          let calculatedDuration = eventData.duration || '60'; // Default to 60 minutes
+
+          const endTime = eventData.endTime || eventData.end_time;
+          if (endTime && !eventData.duration) {
+            log(`GPT Pipeline: End time detected for event ${i + 1}, calculating duration...`);
+            try {
+              // Parse start time (HH:MM format)
+              const [startHour, startMinute] = eventData.time.split(':').map(Number);
+              // Parse end time (HH:MM format)
+              const [endHour, endMinute] = endTime.split(':').map(Number);
+
+              // Calculate total minutes from midnight for both times
+              const startTotalMinutes = startHour * 60 + startMinute;
+              const endTotalMinutes = endHour * 60 + endMinute;
+
+              // Calculate duration in minutes
+              let durationMinutes = endTotalMinutes - startTotalMinutes;
+
+              // Handle cases where event crosses midnight (end time is next day)
+              if (durationMinutes < 0) {
+                durationMinutes += 24 * 60; // Add 24 hours
+              }
+
+              // Validate reasonable duration (between 5 minutes and 24 hours)
+              if (durationMinutes >= 5 && durationMinutes <= 1440) {
+                calculatedDuration = String(durationMinutes);
+                log(`GPT Pipeline: ✓ Calculated duration for event ${i + 1}: ${durationMinutes} minutes (${eventData.time} to ${endTime})`);
+              } else {
+                warn(`GPT Pipeline: Calculated duration ${durationMinutes} min seems unreasonable, using default`);
+              }
+            } catch (error) {
+              logError(`GPT Pipeline: Error calculating duration for event ${i + 1}:`, error);
+              log('GPT Pipeline: Using default duration');
+            }
+          }
+
+          // Step 5: Create event object
+          const parsedEvent = {
+            title: eventData.title,
+            date: eventDate,
+            location: eventData.location || '',
+            description: eventData.description || '',
+            duration: calculatedDuration,
+            notification: '1hr'
+          };
+
+          parsedEvents.push(parsedEvent);
+          log(`GPT Pipeline: ✓ Event ${i + 1} processed successfully. Final duration: ${calculatedDuration} minutes`);
+
+        } catch (eventError) {
+          logError(`GPT Pipeline: Error processing event ${i + 1}:`, eventError);
+          // Continue with next event
+        }
+      }
+
+      if (parsedEvents.length === 0) {
+        logError('GPT Pipeline: No valid events could be parsed');
+        throw new Error('No valid events in response');
+      }
+
+      log('GPT Pipeline: ===== GPT PARSING COMPLETE - SUCCESS =====');
+      log(`GPT Pipeline: Successfully processed ${parsedEvents.length} event(s)`);
+      return parsedEvents; // Return array of parsed events
+
     } catch (gptError) {
-      console.error('GPT Pipeline: ✗ GPT parsing failed:', gptError.message);
-      console.error('GPT Pipeline: Full error:', gptError);
-      console.log('GPT Pipeline: ⚠️  FALLBACK: Using regex-based parsing instead...');
+      logError('GPT Pipeline: ✗ GPT parsing failed:', gptError.message);
+      logError('GPT Pipeline: Full error:', gptError);
+      log('GPT Pipeline: ⚠️  FALLBACK: Using regex-based parsing instead...');
 
       // Fallback to regex-based parsing if GPT fails
       const regexResult = parseEventDetails(rawText);
-      console.log('GPT Pipeline: Regex parsing fallback completed');
+      log('GPT Pipeline: Regex parsing fallback completed');
       return regexResult;
     }
 
-  } catch (error) {
-    console.error('GPT Pipeline: ✗ Critical error in extractAndParseEvent:', error);
-    console.error('GPT Pipeline: Error message:', error.message);
-    console.log('GPT Pipeline: Returning fallback event');
-    return createFallbackEvent();
+  } catch (err) {
+    // Surface known OCR failures to the UI so it can show an actionable message
+    // and a retry, rather than silently dropping the user into a blank event.
+    if (err && err.isOcrError) {
+      throw err;
+    }
+    logError('GPT Pipeline: ✗ Critical error in extractAndParseEvent:', err.message);
+    throw ocrError(OCR_ERROR.INVALID, 'Something went wrong reading this poster.');
   }
 };
 
-export const parseEventDetails = (text) => {
-  try {
-    console.log('===== STARTING EVENT PARSING =====');
-    console.log('Parsing text:', text);
-
-    // Validate input
-    if (!text || typeof text !== 'string') {
-      console.warn('Invalid text input for parsing');
-      return createFallbackEvent();
-    }
-
-    const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-    console.log(`Found ${lines.length} text lines:`, lines);
-
-    // Look for multiple date patterns to identify multiple events
-    const events = [];
-    const dateMatches = findAllDates(text);
-    console.log(`Found ${dateMatches.length} date(s):`, dateMatches.map(d => ({
-      date: d.date.toLocaleString(),
-      hasTime: d.hasTime,
-      originalText: d.originalText
-    })));
-
-    if (dateMatches.length === 0) {
-      // No dates found, create single event with manual entry
-      console.log('No dates found, creating default event');
-      const duration = findDurationInText(text, null); // No start time available
-      return [{
-        title: lines.length > 0 ? lines[0] : 'New Event',
-        date: new Date(),
-        location: '',
-        description: lines.slice(1).join(' '),
-        duration: duration,
-        notification: '1hr'
-      }];
-    }
-
-    // For each date found, try to create an event
-    dateMatches.forEach((dateMatch, index) => {
-      if (!dateMatch || !dateMatch.date) {
-        console.warn('Invalid date match found:', dateMatch);
-        return;
-      }
-
-      console.log(`\nProcessing event ${index + 1}:`);
-      console.log(`  Date: ${dateMatch.date.toLocaleString()}`);
-      console.log(`  Has time: ${dateMatch.hasTime}`);
-
-      // Extract start time from the date if available
-      let startTime = null;
-      if (dateMatch.hasTime) {
-        startTime = {
-          hours: dateMatch.date.getHours(),
-          minutes: dateMatch.date.getMinutes()
-        };
-      }
-
-      // Calculate duration (pass startTime for smart duration calculation from time ranges)
-      const duration = findDurationInText(text, startTime);
-
-      const eventDetails = {
-        title: '',
-        date: dateMatch.date,
-        location: '',
-        description: '',
-        duration: duration,
-        notification: '1hr'
-      };
-
-      // Try to find title near this date
-      const titleCandidate = findTitleNearDate(lines, dateMatch.originalText);
-      if (titleCandidate) {
-        eventDetails.title = titleCandidate;
-        console.log(`  Title (found): "${titleCandidate}"`);
-      } else if (lines.length > 0) {
-        eventDetails.title = lines[0]; // Fallback to first line
-        console.log(`  Title (fallback): "${lines[0]}"`);
-      } else {
-        eventDetails.title = 'New Event';
-        console.log(`  Title (default): "New Event"`);
-      }
-
-      events.push(eventDetails);
-    });
-
-    console.log('\n===== EVENT PARSING COMPLETE =====');
-    console.log(`Created ${events.length} event(s):`, events.map(e => ({
-      title: e.title,
-      date: e.date.toLocaleString(),
-      time: `${e.date.getHours()}:${String(e.date.getMinutes()).padStart(2, '0')}`
-    })));
-
-    return events.length > 0 ? events : createFallbackEvent();
-  } catch (error) {
-    console.error('Error parsing event details:', error);
-    return createFallbackEvent();
-  }
-};
-
-const createFallbackEvent = () => {
-  return [{
-    title: 'New Event',
-    date: new Date(),
-    location: '',
-    description: '',
-    duration: '60',
-    notification: '1hr'
-  }];
-};
-
-/**
- * Extract duration from text - either explicit duration or calculated from time range
- */
-const findDurationInText = (text, startTime) => {
-  // First, try to find explicit duration mentions
-  const durationPatterns = [
-    // Hours: "1 hour", "2 hours", "1hr", "2hrs", "1.5 hours"
-    { pattern: /(\d+(?:\.\d+)?)\s*(?:hour|hr)s?/gi, multiplier: 60 },
-    // Minutes: "30 minutes", "30 mins", "30min", "45 minutes"
-    { pattern: /(\d+)\s*(?:minute|min)s?/gi, multiplier: 1 },
-  ];
-
-  for (const { pattern, multiplier } of durationPatterns) {
-    const match = pattern.exec(text);
-    if (match) {
-      const value = parseFloat(match[1]);
-      const durationInMinutes = Math.round(value * multiplier);
-      console.log(`Duration parsing: Found explicit duration "${match[0]}" -> ${durationInMinutes} minutes`);
-      return String(durationInMinutes);
-    }
-  }
-
-  // If no explicit duration, try to find time range (e.g., "7:00 PM - 9:00 PM")
-  if (startTime) {
-    const endTime = findEndTimeNearStartTime(text, startTime);
-    if (endTime) {
-      const durationMinutes = calculateDurationBetweenTimes(startTime, endTime);
-      if (durationMinutes > 0) {
-        console.log(`Duration parsing: Calculated from time range -> ${durationMinutes} minutes`);
-        return String(durationMinutes);
-      }
-    }
-  }
-
-  console.log('Duration parsing: No duration found in text');
-  return '60'; // Default to 60 minutes (1 hour)
-};
-
-/**
- * Find end time near start time in text (looks for patterns like "7:00 PM - 9:00 PM")
- */
-const findEndTimeNearStartTime = (text, startTime) => {
-  // Look for time range patterns
-  // Matches: "7:00 PM - 9:00 PM", "7PM-9PM", "7:00 to 9:00 PM", "19:00-21:00"
-  const rangePatterns = [
-    // 12-hour with dash: "7:00 PM - 9:00 PM" or "7PM-9PM"
-    /(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)\s*[-–—]\s*(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi,
-    // 12-hour with "to": "7:00 PM to 9:00 PM"
-    /(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)\s+(?:to|until|till)\s+(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi,
-    // 12-hour start, implied PM end: "7-9 PM" or "7:00-9:00 PM"
-    /(\d{1,2}):?(\d{2})?\s*[-–—]\s*(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi,
-    // 24-hour format: "19:00-21:00"
-    /(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})(?!\s*(?:am|pm))/gi,
-  ];
-
-  for (const pattern of rangePatterns) {
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      console.log(`Duration parsing: Found time range pattern "${match[0]}"`);
-
-      // Try different group indices based on which pattern matched
-      let endHour, endMinute, endMeridiem;
-
-      if (match[6]) {
-        // Pattern 1 or 2: Full range with both AM/PM
-        endHour = parseInt(match[4]);
-        endMinute = match[5] ? parseInt(match[5]) : 0;
-        endMeridiem = match[6].toLowerCase();
-      } else if (match[5]) {
-        // Pattern 3: Start time - end time with shared AM/PM
-        endHour = parseInt(match[3]);
-        endMinute = match[4] ? parseInt(match[4]) : 0;
-        endMeridiem = match[5].toLowerCase();
-      } else if (match[4]) {
-        // Pattern 4: 24-hour format
-        endHour = parseInt(match[3]);
-        endMinute = parseInt(match[4]);
-        endMeridiem = null;
-      }
-
-      // Convert to 24-hour format if needed
-      if (endMeridiem) {
-        if (endMeridiem.startsWith('p') && endHour !== 12) {
-          endHour += 12;
-        } else if (endMeridiem.startsWith('a') && endHour === 12) {
-          endHour = 0;
-        }
-      }
-
-      // Validate
-      if (endHour >= 0 && endHour < 24 && endMinute >= 0 && endMinute < 60) {
-        console.log(`Duration parsing: ✓ Extracted end time ${endHour}:${String(endMinute).padStart(2, '0')}`);
-        return { hours: endHour, minutes: endMinute };
-      }
-    }
-  }
-
-  return null;
-};
-
-/**
- * Calculate duration in minutes between two time objects
- */
-const calculateDurationBetweenTimes = (startTime, endTime) => {
-  const startMinutes = startTime.hours * 60 + startTime.minutes;
-  const endMinutes = endTime.hours * 60 + endTime.minutes;
-
-  let duration = endMinutes - startMinutes;
-
-  // Handle overnight events
-  if (duration < 0) {
-    duration += 24 * 60;
-  }
-
-  // Validate reasonable duration (5 minutes to 12 hours)
-  if (duration >= 5 && duration <= 720) {
-    return duration;
-  }
-
-  return 0; // Invalid duration
-};
-
-/**
- * Extract times from text and associate them with dates
- */
-const findTimesNearDate = (text, datePosition) => {
-  const timePatterns = [
-    // 12-hour format: 7:00 PM, 7PM, 7:00pm
-    { pattern: /(\d{1,2}):?(\d{2})?\s*(am|pm|a\.m\.|p\.m\.)/gi, name: '12-hour' },
-    // 24-hour format: 19:00, 1900 (only match if NOT followed by AM/PM)
-    { pattern: /(\d{1,2}):(\d{2})(?!\s*(?:am|pm|a\.m\.|p\.m\.))/gi, name: '24-hour' },
-  ];
-
-  let closestTime = null;
-  let closestDistance = Infinity;
-  let closestMatch = null;
-
-  timePatterns.forEach(({ pattern, name }) => {
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const distance = Math.abs(match.index - datePosition);
-
-      console.log(`Time parsing: Found ${name} match "${match[0]}" at position ${match.index}, distance from date: ${distance}`);
-
-      // Look for times within 200 characters of the date
-      if (distance < 200 && distance < closestDistance) {
-        const parsedTime = parseTime(match, name);
-        if (parsedTime) {
-          console.log(`Time parsing: Parsed as ${parsedTime.hours}:${String(parsedTime.minutes).padStart(2, '0')} (${parsedTime.hours >= 12 ? 'PM' : 'AM'})`);
-          closestDistance = distance;
-          closestTime = parsedTime;
-          closestMatch = match[0];
-        }
-      }
-    }
-  });
-
-  if (closestTime) {
-    console.log(`Time parsing: Selected closest time "${closestMatch}": ${closestTime.hours}:${String(closestTime.minutes).padStart(2, '0')}`);
-  } else {
-    console.log('Time parsing: No time found near date');
-  }
-
-  return closestTime;
-};
-
-/**
- * Parse time from regex match
- */
-const parseTime = (match, patternName) => {
-  try {
-    let hours = parseInt(match[1]);
-    const minutes = match[2] ? parseInt(match[2]) : 0;
-    const meridiem = match[3] ? match[3].toLowerCase() : null;
-
-    console.log(`Time parsing [${patternName}]: Raw match - hours:${hours}, minutes:${minutes}, meridiem:${meridiem || 'none'}`);
-
-    if (meridiem) {
-      // 12-hour format
-      const originalHours = hours;
-      if (meridiem.startsWith('p') && hours !== 12) {
-        hours += 12;
-        console.log(`Time parsing: Converting ${originalHours}PM to ${hours} (24-hour)`);
-      } else if (meridiem.startsWith('a') && hours === 12) {
-        hours = 0;
-        console.log(`Time parsing: Converting 12AM to 0 (24-hour)`);
-      } else {
-        console.log(`Time parsing: Keeping ${hours} (already correct for ${meridiem.toUpperCase()})`);
-      }
-    }
-
-    // Validate time
-    if (hours >= 0 && hours < 24 && minutes >= 0 && minutes < 60) {
-      return { hours, minutes };
-    } else {
-      console.warn(`Time parsing: Invalid time - hours:${hours}, minutes:${minutes}`);
-    }
-  } catch (error) {
-    console.error('Time parsing error:', error);
-  }
-
-  return null;
-};
-
-const findAllDates = (text) => {
-  const dateMatches = [];
-
-  const datePatterns = [
-    // MM/DD/YYYY or MM-DD-YYYY
-    { pattern: /(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/g, type: 'numeric' },
-    // Month DD, YYYY
-    { pattern: /(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2}),?\s+(\d{4})/gi, type: 'monthFirst' },
-    // DD Month YYYY
-    { pattern: /(\d{1,2})\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{4})/gi, type: 'dayFirst' },
-    // Month DD (current year)
-    { pattern: /(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})/gi, type: 'monthOnly' },
-    // Abbreviated months: Dec 15, 2024 or 15 Dec 2024
-    { pattern: /(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/gi, type: 'abbrMonthFirst' },
-    { pattern: /(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{4})/gi, type: 'abbrDayFirst' },
-  ];
-
-  datePatterns.forEach(({ pattern, type }) => {
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const parsedDate = parseDate(match, type);
-      if (parsedDate) {
-        // Try to find time near this date
-        const timeInfo = findTimesNearDate(text, match.index);
-
-        // Apply time to date if found
-        if (timeInfo) {
-          parsedDate.setHours(timeInfo.hours, timeInfo.minutes, 0, 0);
-        }
-
-        dateMatches.push({
-          date: parsedDate,
-          originalText: match[0],
-          position: match.index,
-          hasTime: timeInfo !== null
-        });
-      }
-    }
-  });
-
-  return dateMatches;
-};
-
-const findTitleNearDate = (lines, dateText) => {
-  // Simple heuristic: look for the first meaningful line that's not the date
-  for (const line of lines) {
-    if (!line.toLowerCase().includes(dateText.toLowerCase()) && line.length > 3) {
-      return line;
-    }
-  }
-  return null;
-};
-
-const parseDate = (match, type) => {
-  const currentYear = new Date().getFullYear();
-
-  const monthNames = {
-    january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
-    july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
-    jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
-    jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11
-  };
-
-  try {
-    switch (type) {
-      case 'numeric':
-        // MM/DD/YYYY or MM-DD-YYYY
-        const month = parseInt(match[1]) - 1;
-        const day = parseInt(match[2]);
-        const year = parseInt(match[3]);
-        return new Date(year, month, day);
-
-      case 'monthFirst':
-      case 'abbrMonthFirst':
-        // Month DD, YYYY or Dec 15, 2024
-        const monthName1 = match[1].toLowerCase().replace(/\./g, '');
-        const month1 = monthNames[monthName1];
-        const day1 = parseInt(match[2]);
-        const year1 = parseInt(match[3]);
-        if (month1 !== undefined) {
-          return new Date(year1, month1, day1);
-        }
-        break;
-
-      case 'dayFirst':
-      case 'abbrDayFirst':
-        // DD Month YYYY or 15 Dec 2024
-        const day2 = parseInt(match[1]);
-        const monthName2 = match[2].toLowerCase().replace(/\./g, '');
-        const month2 = monthNames[monthName2];
-        const year2 = parseInt(match[3]);
-        if (month2 !== undefined) {
-          return new Date(year2, month2, day2);
-        }
-        break;
-
-      case 'monthOnly':
-        // Month DD (current year)
-        const monthName3 = match[1].toLowerCase();
-        const month3 = monthNames[monthName3];
-        const day3 = parseInt(match[2]);
-        if (month3 !== undefined) {
-          return new Date(currentYear, month3, day3);
-        }
-        break;
-    }
-  } catch (error) {
-    console.log('Error parsing date:', error);
-  }
-
-  return null;
-};

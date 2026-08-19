@@ -1,8 +1,9 @@
 import React, { useState, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Alert, Dimensions, ActivityIndicator } from 'react-native';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useEvent } from '../context/EventContext';
+import { log, error as logError } from '../utils/logger';
 
 const { width, height } = Dimensions.get('window');
 
@@ -33,11 +34,11 @@ export default function CameraScreen({ navigation }) {
           throw new Error('Invalid photo captured');
         }
 
-        console.log('Photo captured successfully:', photo.uri);
+        log('Photo captured successfully:', photo.uri);
         dispatch({ type: 'SET_IMAGE', payload: photo });
         navigation.navigate('EventEditor');
       } catch (error) {
-        console.error('Error taking picture:', error);
+        logError('Error taking picture:', error);
         dispatch({ type: 'SET_ERROR', payload: error.message || 'Failed to capture image' });
         dispatch({ type: 'SET_PROCESSING', payload: false });
         Alert.alert('Camera Error', error.message || 'Failed to capture image. Please try again.');
@@ -217,37 +218,6 @@ const styles = StyleSheet.create({
     color: '#000000',
     textAlign: 'center',
     marginTop: 100,
-    fontWeight: '600',
-    letterSpacing: -0.4,
-  },
-  subText: {
-    fontSize: 17,
-    color: '#6B6B6B',
-    textAlign: 'center',
-    marginTop: 12,
-    paddingHorizontal: 40,
-    lineHeight: 22,
-    letterSpacing: -0.4,
-  },
-  permissionButton: {
-    backgroundColor: '#000000',
-    paddingHorizontal: 32,
-    paddingVertical: 16,
-    borderRadius: 12,
-    marginTop: 32,
-    alignSelf: 'center',
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 4,
-    },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  permissionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 17,
     fontWeight: '600',
     letterSpacing: -0.4,
   },
