@@ -14,3 +14,11 @@ const extra =
   {};
 
 export const APP_API_KEY = extra.appApiKey || '';
+
+/**
+ * Public App Store (or TestFlight) link used in the referral share message.
+ * Set `expo.extra.appStoreUrl` in app.json to the real listing when available;
+ * the placeholder below keeps the share flow working until then.
+ */
+export const APP_STORE_URL =
+  extra.appStoreUrl || 'https://apps.apple.com/app/id0000000000';

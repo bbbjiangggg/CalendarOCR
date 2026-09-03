@@ -2,6 +2,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as IAP from 'react-native-iap';
 import { Platform } from 'react-native';
 import { log, error as logError } from './logger';
+import { totalRemaining, consumeScan } from './referralMath';
+import { getStatus, activate } from './referralService';
 
 // Product IDs (must match what you set up in App Store Connect)
 const PRODUCT_IDS = Platform.select({
@@ -9,12 +11,19 @@ const PRODUCT_IDS = Platform.select({
   android: ['pro_unlimited'],
 });
 
-const SCAN_LIMIT_KEY = '@CalendarOCR:scanCount';
+const SCAN_LIMIT_KEY = '@CalendarOCR:scanCount';          // monthly free scans used
 const SCAN_RESET_KEY = '@CalendarOCR:lastResetDate';
 const PRO_STATUS_KEY = '@CalendarOCR:isPro';
+const BONUS_EARNED_KEY = '@CalendarOCR:bonusScansEarned'; // cache of server-earned bonus
+const BONUS_USED_KEY = '@CalendarOCR:bonusScansUsed';     // bonus pool consumed
+const ACTIVATED_KEY = '@CalendarOCR:referralActivated';   // first-save activation sent
 
-// Constants
-const FREE_SCANS_PER_MONTH = 3;
+// Read a stored non-negative integer counter (0 if unset/invalid).
+const readInt = async (key) => {
+  const s = await AsyncStorage.getItem(key);
+  const parsed = s ? parseInt(s, 10) : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 /**
  * Initialize IAP connection
@@ -26,6 +35,9 @@ export const initIAP = async () => {
 
     // Check if user has purchased Pro
     await checkPurchaseStatus();
+
+    // Pull latest referral bonus balance (non-fatal if offline)
+    await syncReferralBonus();
   } catch (error) {
     logError('IAP: Failed to initialize:', error);
   }
@@ -67,15 +79,14 @@ export const getRemainingScans = async () => {
       return -1; // -1 means unlimited
     }
 
-    // Check if we need to reset monthly counter
+    // Check if we need to reset the monthly counter (bonus pool never resets)
     await resetMonthlyScansIfNeeded();
 
-    // Get current scan count
-    const scanCountStr = await AsyncStorage.getItem(SCAN_LIMIT_KEY);
-    const scanCount = scanCountStr ? parseInt(scanCountStr) : 0;
+    const monthlyUsed = await readInt(SCAN_LIMIT_KEY);
+    const bonusEarned = await readInt(BONUS_EARNED_KEY);
+    const bonusUsed = await readInt(BONUS_USED_KEY);
 
-    const remaining = FREE_SCANS_PER_MONTH - scanCount;
-    return Math.max(0, remaining);
+    return totalRemaining(monthlyUsed, bonusEarned, bonusUsed);
   } catch (error) {
     logError('IAP: Error getting remaining scans:', error);
     return 0;
@@ -94,15 +105,22 @@ export const incrementScanCount = async () => {
 
     await resetMonthlyScansIfNeeded();
 
-    const scanCountStr = await AsyncStorage.getItem(SCAN_LIMIT_KEY);
-    const scanCount = scanCountStr ? parseInt(scanCountStr) : 0;
+    const monthlyUsed = await readInt(SCAN_LIMIT_KEY);
+    const bonusEarned = await readInt(BONUS_EARNED_KEY);
+    const bonusUsed = await readInt(BONUS_USED_KEY);
 
-    if (scanCount >= FREE_SCANS_PER_MONTH) {
-      return false; // Limit reached
+    // Spend monthly free first, then the permanent referral bonus pool.
+    const result = consumeScan(monthlyUsed, bonusEarned, bonusUsed);
+    if (!result.ok) {
+      return false; // No scans left (monthly + bonus both exhausted)
     }
 
-    await AsyncStorage.setItem(SCAN_LIMIT_KEY, String(scanCount + 1));
-    log(`IAP: Scan count incremented to ${scanCount + 1}`);
+    if (result.bucket === 'free') {
+      await AsyncStorage.setItem(SCAN_LIMIT_KEY, String(result.monthlyUsed));
+    } else {
+      await AsyncStorage.setItem(BONUS_USED_KEY, String(result.bonusUsed));
+    }
+    log(`IAP: Scan charged to ${result.bucket} bucket`);
     return true;
   } catch (error) {
     logError('IAP: Error incrementing scan count:', error);
@@ -127,6 +145,45 @@ const resetMonthlyScansIfNeeded = async () => {
     }
   } catch (error) {
     logError('IAP: Error resetting monthly scans:', error);
+  }
+};
+
+/**
+ * Referral: pull the server-authoritative earned bonus balance into the local
+ * cache so getRemainingScans reflects it. Non-fatal on failure (keeps last
+ * known value). Returns the full status object (or null).
+ */
+export const syncReferralBonus = async () => {
+  try {
+    const status = await getStatus();
+    if (status && Number.isFinite(status.bonusScans)) {
+      await AsyncStorage.setItem(BONUS_EARNED_KEY, String(status.bonusScans));
+    }
+    return status;
+  } catch (error) {
+    logError('Referral: bonus sync failed:', error);
+    return null;
+  }
+};
+
+/**
+ * Referral: mark this device activated on its first successful save. Tells the
+ * backend to credit any pending referral (both sides +3). Sent at most once per
+ * device (guarded locally); the backend is also idempotent. After a successful
+ * activation we re-sync so a referred user's own +3 shows up immediately.
+ */
+export const markActivatedIfNeeded = async () => {
+  try {
+    const already = await AsyncStorage.getItem(ACTIVATED_KEY);
+    if (already === 'true') return;
+
+    const result = await activate();
+    if (result) {
+      await AsyncStorage.setItem(ACTIVATED_KEY, 'true');
+      await syncReferralBonus();
+    }
+  } catch (error) {
+    logError('Referral: activation failed:', error);
   }
 };
 

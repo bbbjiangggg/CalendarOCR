@@ -18,7 +18,7 @@ import * as Haptics from 'expo-haptics';
 import { useEvent } from '../context/EventContext';
 import { extractAndParseEvent, OCR_ERROR } from '../utils/ocrService';
 import { saveEventToCalendar } from '../utils/calendarService';
-import { incrementScanCount, getRemainingScans } from '../utils/purchaseService';
+import { incrementScanCount, getRemainingScans, markActivatedIfNeeded } from '../utils/purchaseService';
 import { log, error as logError } from '../utils/logger';
 import SuccessAnimation from '../components/SuccessAnimation';
 import AnalyzingLoader from '../components/AnalyzingLoader';
@@ -244,6 +244,10 @@ export default function EventEditorScreen({ navigation }) {
       const success = await saveEventToCalendar(currentEvent);
 
       if (success) {
+        // First successful save = referral activation. Fire-and-forget so it
+        // never blocks the save/celebration; the backend is idempotent.
+        markActivatedIfNeeded();
+
         const savedTitle = currentEvent.title;
         // Remove the saved event from the array
         const updatedEvents = state.events.filter((_, idx) => idx !== state.currentEventIndex);

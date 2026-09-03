@@ -7,6 +7,7 @@ import LandingScreen from './src/screens/LandingScreen';
 import CameraScreen from './src/screens/CameraScreen';
 import EventEditorScreen from './src/screens/EventEditorScreen';
 import UpgradeScreen from './src/screens/UpgradeScreen';
+import ReferralScreen from './src/screens/ReferralScreen';
 import ErrorBoundary from './src/components/ErrorBoundary';
 import { initIAP, endIAP, setupPurchaseListener } from './src/utils/purchaseService';
 
@@ -54,6 +55,13 @@ export default function App() {
             <Stack.Screen
               name="Upgrade"
               component={UpgradeScreen}
+              options={{
+                presentation: 'modal',
+              }}
+            />
+            <Stack.Screen
+              name="Referral"
+              component={ReferralScreen}
               options={{
                 presentation: 'modal',
               }}

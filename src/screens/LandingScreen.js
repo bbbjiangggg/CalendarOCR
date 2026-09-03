@@ -9,9 +9,11 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
+import { Feather } from '@expo/vector-icons';
 import { useEvent } from '../context/EventContext';
-import { getRemainingScans, incrementScanCount, checkIsPro } from '../utils/purchaseService';
+import { getRemainingScans, incrementScanCount, checkIsPro, syncReferralBonus } from '../utils/purchaseService';
 import TutorialOverlay from '../components/TutorialOverlay';
+import RedeemCodeModal from '../components/RedeemCodeModal';
 
 const TUTORIAL_KEY = '@CalendarOCR:tutorialSeen';
 
@@ -20,6 +22,7 @@ export default function LandingScreen({ navigation }) {
   const [remainingScans, setRemainingScans] = useState(-1);
   const [isPro, setIsPro] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
+  const [showRedeem, setShowRedeem] = useState(false);
 
   useEffect(() => {
     loadScanStatus();
@@ -36,6 +39,9 @@ export default function LandingScreen({ navigation }) {
 
   const loadScanStatus = async () => {
     const proStatus = await checkIsPro();
+    // Refresh referral bonus from the server first so the count reflects any
+    // scans earned since last time (non-fatal if offline).
+    await syncReferralBonus();
     const remaining = await getRemainingScans();
     setIsPro(proStatus);
     setRemainingScans(remaining);
@@ -155,6 +161,16 @@ export default function LandingScreen({ navigation }) {
 
         {/* Footer */}
         <View style={styles.footer}>
+          {/* Referral: invite friends */}
+          <TouchableOpacity
+            style={styles.inviteButton}
+            onPress={() => navigation.navigate('Referral')}
+            activeOpacity={0.85}
+          >
+            <Feather name="gift" size={15} color="#FF6B6B" style={styles.inviteIcon} />
+            <Text style={styles.inviteText}>Invite friends, get free scans</Text>
+          </TouchableOpacity>
+
           {!isPro && remainingScans >= 0 && (
             <TouchableOpacity
               style={styles.proPrompt}
@@ -171,11 +187,23 @@ export default function LandingScreen({ navigation }) {
           {isPro && (
             <Text style={styles.proStatusText}>✓ Pro · Unlimited scans</Text>
           )}
+
+          {/* Referral: redeem a friend's code */}
+          <TouchableOpacity onPress={() => setShowRedeem(true)} activeOpacity={0.7}>
+            <Text style={styles.redeemLink}>Have an invite code?</Text>
+          </TouchableOpacity>
+
           <Text style={styles.footerText}>
             Automatically detects dates, times, and locations
           </Text>
         </View>
       </View>
+
+      <RedeemCodeModal
+        visible={showRedeem}
+        onClose={() => setShowRedeem(false)}
+        onSuccess={loadScanStatus}
+      />
     </SafeAreaView>
   );
 }
@@ -260,11 +288,41 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingBottom: 40,
   },
+  inviteButton: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#EAEAEA',
+    paddingVertical: 14,
+    borderRadius: 14,
+    marginBottom: 12,
+  },
+  inviteIcon: {
+    marginRight: 8,
+  },
+  inviteText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000000',
+    letterSpacing: -0.2,
+  },
+  redeemLink: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#6B6B6B',
+    textAlign: 'center',
+    marginBottom: 16,
+    letterSpacing: -0.1,
+  },
   proPrompt: {
+    width: '100%',
+    alignItems: 'center',
     backgroundColor: '#000000',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 20,
+    paddingVertical: 14,
+    borderRadius: 14,
     marginBottom: 16,
   },
   proPromptText: {

@@ -2,7 +2,7 @@
   "expo": {
     "name": "CalendarOCR",
     "slug": "CalendarOCR",
-    "version": "1.1.6",
+    "version": "1.1.8",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -59,7 +59,8 @@
       "eas": {
         "projectId": "8a1971f6-89f5-4a88-ba9b-56919dd9b74d"
       },
-      "appApiKey": "ffd92c4f60c6bddf7ea570ea5d70648e7d7475756c75b558"
+      "appApiKey": "ffd92c4f60c6bddf7ea570ea5d70648e7d7475756c75b558",
+      "appStoreUrl": "https://apps.apple.com/us/app/calendarocr/id6754291511"
     },
     "owner": "bowenjiang"
   }
