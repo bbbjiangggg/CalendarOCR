@@ -26,8 +26,8 @@ const CODE_LENGTH = 6;
  *  • Segmented 6-cell code input (a single hidden TextInput drives six visual
  *    cells) for a polished, App-Store-standard entry experience.
  *
- * The reward (3 scans) is granted on the user's FIRST SAVE, so the success copy
- * says "when you save your first event" rather than implying instant scans.
+ * The reward (3 scans) is granted immediately on redemption, so the success copy
+ * confirms the scans have already been added.
  *
  * Props: visible, onClose, onSuccess()
  */
@@ -147,7 +147,7 @@ export default function RedeemCodeModal({ visible, onClose, onSuccess }) {
               </View>
               <Text style={styles.title}>Code applied</Text>
               <Text style={styles.subtitle}>
-                You’ll get 3 free scans when you save your first event.
+                3 free scans have been added to your account. Enjoy!
               </Text>
             </View>
           ) : (

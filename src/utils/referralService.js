@@ -3,7 +3,7 @@
  *
  * Endpoints (all POST, gated by the shared x-app-key like ocrService):
  *   /api/referral/code     -> { code, bonusScans, referrals }
- *   /api/referral/redeem   -> 200 { success:true } | 409 { success:false, reason, message }
+ *   /api/referral/redeem   -> 200 { success:true, bonusScans } | 409 { success:false, reason, message }
  *   /api/referral/activate -> { credited, alreadyActivated, bonusScans }
  *   /api/referral/status   -> { code, bonusScans, referrals, referredBy, activated }
  *
@@ -48,9 +48,10 @@ export const getMyCode = async () => {
 };
 
 /**
- * Redeem a friend's code. Always returns a structured result:
+ * Redeem a friend's code (credits both sides +3 immediately). Always returns a
+ * structured result:
  *   { success: true }
- *   { success: false, reason, message }   // invalid_code | self_referral | already_referred | not_new_user | network
+ *   { success: false, reason, message }   // invalid_code | self_referral | already_referred | network
  */
 export const redeemCode = async (code) => {
   try {

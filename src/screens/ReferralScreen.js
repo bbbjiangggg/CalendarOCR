@@ -90,8 +90,8 @@ export default function ReferralScreen({ navigation }) {
             </View>
             <Text style={styles.title}>Give 3, get 3</Text>
             <Text style={styles.subtitle}>
-              Friends get 3 free scans. When they scan their first poster,
-              you both get 3 more.
+              When a friend redeems your code, you both get 3 free scans —
+              added instantly.
             </Text>
           </View>
 
