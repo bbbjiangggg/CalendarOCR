@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,13 +10,80 @@ import {
   Dimensions,
   ScrollView,
 } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { purchasePro, restorePurchases } from '../utils/purchaseService';
+import {
+  connectWind,
+  disconnectWind,
+  refreshWindStatus,
+  isWindConnectedCached,
+} from '../utils/windService';
 
 export default function UpgradeScreen({ navigation, route }) {
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [windConnected, setWindConnected] = useState(false);
+  const [windBusy, setWindBusy] = useState(false);
 
   const { remainingScans = 0 } = route.params || {};
+
+  // Show the cached state instantly, then reconcile with the backend.
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setWindConnected(await isWindConnectedCached());
+      const { connected } = await refreshWindStatus();
+      if (mounted) setWindConnected(connected);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleConnectWind = async () => {
+    try {
+      setWindBusy(true);
+      const res = await connectWind();
+      if (res.ok) {
+        setWindConnected(true);
+        Alert.alert(
+          'Connected to Wind ⚡',
+          'Scans are now billed to your Wind wallet — no monthly limit. You can disconnect anytime.',
+          [{ text: 'Start Scanning', onPress: () => navigation.goBack() }]
+        );
+      }
+      // res.canceled → user dismissed the sheet; stay put silently.
+    } catch (err) {
+      Alert.alert('Could not connect', err?.message || 'Please try again.', [{ text: 'OK' }]);
+    } finally {
+      setWindBusy(false);
+    }
+  };
+
+  const handleDisconnectWind = () => {
+    Alert.alert(
+      'Disconnect Wind?',
+      'Scans will go back to your free monthly scans (or Pro). You can reconnect anytime.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setWindBusy(true);
+              await disconnectWind();
+              setWindConnected(false);
+            } catch (err) {
+              Alert.alert('Error', 'Could not disconnect. Please try again.');
+            } finally {
+              setWindBusy(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   // Responsive design: detect screen size
   const { width, height } = Dimensions.get('window');
@@ -171,6 +238,58 @@ export default function UpgradeScreen({ navigation, route }) {
             <Text style={styles.restoreButtonText}>Restore Purchase</Text>
           )}
         </TouchableOpacity>
+
+        {/* OR divider */}
+        <View style={styles.orRow}>
+          <View style={styles.orLine} />
+          <Text style={styles.orText}>OR</Text>
+          <View style={styles.orLine} />
+        </View>
+
+        {/* Connect with Wind — pay as you go */}
+        <View style={styles.windCard}>
+          <Text style={styles.windTitle}>⚡ Pay as you go</Text>
+          <Text style={styles.windSubtitle}>
+            Connect your Wind wallet and pay only for what you scan — billed at
+            cost, no subscription, no commitment.
+          </Text>
+
+          {windConnected ? (
+            <>
+              <Text style={styles.windConnectedText}>✓ Connected · Unlimited scans</Text>
+              <TouchableOpacity
+                style={styles.windDisconnectButton}
+                onPress={handleDisconnectWind}
+                disabled={windBusy}
+                activeOpacity={0.7}
+              >
+                {windBusy ? (
+                  <ActivityIndicator color="#6B6B6B" />
+                ) : (
+                  <Text style={styles.windDisconnectText}>Disconnect</Text>
+                )}
+              </TouchableOpacity>
+            </>
+          ) : (
+            <TouchableOpacity
+              style={styles.windConnectButton}
+              onPress={handleConnectWind}
+              disabled={windBusy}
+              activeOpacity={0.85}
+            >
+              {windBusy ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <View style={styles.windConnectInner}>
+                  <Feather name="wind" size={20} color="#FFFFFF" style={styles.windConnectIcon} />
+                  <Text style={styles.windConnectText}>Connect with Wind</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          )}
+
+          <Text style={styles.windFootnote}>Powered by Wind · usewind.app</Text>
+        </View>
 
         {/* Footer */}
         <View style={styles.footerContainer}>
@@ -344,6 +463,100 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     letterSpacing: -0.2,
+  },
+  orRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 24,
+  },
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E0E0E0',
+  },
+  orText: {
+    marginHorizontal: 12,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#9A9A9A',
+    letterSpacing: 0.5,
+  },
+  windCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    padding: 20,
+    alignItems: 'center',
+  },
+  windTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#2F8F55',
+    letterSpacing: -0.4,
+    marginBottom: 8,
+  },
+  windSubtitle: {
+    fontSize: 14,
+    fontWeight: '400',
+    color: '#6B6B6B',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 18,
+  },
+  windConnectButton: {
+    width: '100%',
+    backgroundColor: '#6BBE78',
+    paddingVertical: 16,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#4C9A5A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  windConnectInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  windConnectIcon: {
+    marginRight: 10,
+  },
+  windConnectText: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '700',
+    letterSpacing: -0.3,
+  },
+  windConnectedText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1A8A4A',
+    letterSpacing: -0.2,
+    marginBottom: 14,
+  },
+  windDisconnectButton: {
+    width: '100%',
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#D0D0D0',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+  },
+  windDisconnectText: {
+    color: '#333333',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  windFootnote: {
+    marginTop: 14,
+    fontSize: 12,
+    fontWeight: '400',
+    color: '#9A9A9A',
   },
   footerContainer: {
     marginTop: 'auto',

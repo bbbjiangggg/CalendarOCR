@@ -3,6 +3,7 @@ import * as FileSystem from 'expo-file-system';
 import { log, warn, error as logError } from './logger';
 import { APP_API_KEY } from './config';
 import { parseEventDetails } from './eventParsing';
+import { scanWithWind } from './windService';
 
 // Re-export so existing importers of parseEventDetails from this module keep working.
 export { parseEventDetails };
@@ -20,6 +21,7 @@ export const OCR_ERROR = {
   SERVER: 'server',     // backend responded with an error
   NO_TEXT: 'no_text',   // OCR succeeded but found no readable text
   INVALID: 'invalid',   // bad input / unexpected response
+  WIND_RECONNECT: 'wind_reconnect', // Wind token died — user must reconnect
 };
 
 const ocrError = (type, message) => Object.assign(new Error(message), { type, isOcrError: true });
@@ -52,6 +54,64 @@ const preprocessImage = async (imageUri) => {
     warn('OCR: Preprocessing failed, using original image:', err.message);
     return imageUri;
   }
+};
+
+/**
+ * Convert raw parsed events — { title, date, time, duration?, endTime?/end_time?,
+ * location?, description? } — into the app's event objects: a real Date, a
+ * resolved duration (explicit value wins, else derived from an end time), and
+ * defaults. Invalid rows are skipped. Shared by the GPT (flat) path and the
+ * Wind scan path so both produce identical shapes downstream.
+ */
+export const normalizeParsedEvents = (eventsData) => {
+  const parsedEvents = [];
+
+  for (let i = 0; i < eventsData.length; i++) {
+    const eventData = eventsData[i];
+    try {
+      // Combine date + time ("2024-12-25" + "14:30" -> "2024-12-25T14:30").
+      const dateTimeString = `${eventData.date}T${eventData.time}`;
+      const eventDate = new Date(dateTimeString);
+      if (isNaN(eventDate.getTime())) {
+        logError(`Event normalize: invalid date/time for event ${i + 1}:`, dateTimeString);
+        continue; // Skip this event
+      }
+
+      // Duration: an explicit value wins; otherwise derive it from an end time.
+      let calculatedDuration = eventData.duration || '60'; // Default to 60 minutes
+      const endTime = eventData.endTime || eventData.end_time;
+      if (endTime && !eventData.duration) {
+        try {
+          const [startHour, startMinute] = eventData.time.split(':').map(Number);
+          const [endHour, endMinute] = endTime.split(':').map(Number);
+          let durationMinutes = (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+          if (durationMinutes < 0) durationMinutes += 24 * 60; // event crosses midnight
+          // Only trust a sane span (5 min – 24 h); otherwise keep the default.
+          if (durationMinutes >= 5 && durationMinutes <= 1440) {
+            calculatedDuration = String(durationMinutes);
+          } else {
+            warn(`Event normalize: duration ${durationMinutes}min unreasonable, using default`);
+          }
+        } catch (err) {
+          logError(`Event normalize: duration calc failed for event ${i + 1}:`, err?.message);
+        }
+      }
+
+      parsedEvents.push({
+        title: eventData.title,
+        date: eventDate,
+        location: eventData.location || '',
+        description: eventData.description || '',
+        duration: calculatedDuration,
+        notification: '1hr',
+      });
+    } catch (eventError) {
+      logError(`Event normalize: error processing event ${i + 1}:`, eventError?.message);
+      // Continue with the next event
+    }
+  }
+
+  return parsedEvents;
 };
 
 /**
@@ -197,92 +257,8 @@ export const extractAndParseEvent = async (imageUri, onProgress) => {
         throw new Error('Invalid response from GPT parsing API');
       }
 
-      // Process each event
-      const parsedEvents = [];
-
-      for (let i = 0; i < eventsData.length; i++) {
-        const eventData = eventsData[i];
-        log(`GPT Pipeline: Processing event ${i + 1}/${eventsData.length}:`, {
-          title: eventData.title,
-          date: eventData.date,
-          time: eventData.time,
-          endTime: eventData.endTime || eventData.end_time || '(empty)',
-          location: eventData.location ? `"${eventData.location}"` : '(empty)',
-          description: eventData.description ? `"${eventData.description.substring(0, 50)}..."` : '(empty)',
-          duration: eventData.duration || '(empty)'
-        });
-
-        try {
-          // Step 3: Convert GPT response (ISO date/time strings) to JavaScript Date object
-          log(`GPT Pipeline: Converting ISO date/time to Date object for event ${i + 1}...`);
-
-          // Combine date and time: "2024-12-25" + "14:30" -> "2024-12-25T14:30"
-          const dateTimeString = `${eventData.date}T${eventData.time}`;
-          const eventDate = new Date(dateTimeString);
-
-          // Validate the date
-          if (isNaN(eventDate.getTime())) {
-            logError(`GPT Pipeline: Invalid date/time from GPT for event ${i + 1}:`, dateTimeString);
-            continue; // Skip this event
-          }
-
-          log(`GPT Pipeline: ✓ Date conversion successful for event ${i + 1}:`, eventDate.toLocaleString());
-
-          // Step 4: Calculate duration from start and end time if available
-          let calculatedDuration = eventData.duration || '60'; // Default to 60 minutes
-
-          const endTime = eventData.endTime || eventData.end_time;
-          if (endTime && !eventData.duration) {
-            log(`GPT Pipeline: End time detected for event ${i + 1}, calculating duration...`);
-            try {
-              // Parse start time (HH:MM format)
-              const [startHour, startMinute] = eventData.time.split(':').map(Number);
-              // Parse end time (HH:MM format)
-              const [endHour, endMinute] = endTime.split(':').map(Number);
-
-              // Calculate total minutes from midnight for both times
-              const startTotalMinutes = startHour * 60 + startMinute;
-              const endTotalMinutes = endHour * 60 + endMinute;
-
-              // Calculate duration in minutes
-              let durationMinutes = endTotalMinutes - startTotalMinutes;
-
-              // Handle cases where event crosses midnight (end time is next day)
-              if (durationMinutes < 0) {
-                durationMinutes += 24 * 60; // Add 24 hours
-              }
-
-              // Validate reasonable duration (between 5 minutes and 24 hours)
-              if (durationMinutes >= 5 && durationMinutes <= 1440) {
-                calculatedDuration = String(durationMinutes);
-                log(`GPT Pipeline: ✓ Calculated duration for event ${i + 1}: ${durationMinutes} minutes (${eventData.time} to ${endTime})`);
-              } else {
-                warn(`GPT Pipeline: Calculated duration ${durationMinutes} min seems unreasonable, using default`);
-              }
-            } catch (error) {
-              logError(`GPT Pipeline: Error calculating duration for event ${i + 1}:`, error);
-              log('GPT Pipeline: Using default duration');
-            }
-          }
-
-          // Step 5: Create event object
-          const parsedEvent = {
-            title: eventData.title,
-            date: eventDate,
-            location: eventData.location || '',
-            description: eventData.description || '',
-            duration: calculatedDuration,
-            notification: '1hr'
-          };
-
-          parsedEvents.push(parsedEvent);
-          log(`GPT Pipeline: ✓ Event ${i + 1} processed successfully. Final duration: ${calculatedDuration} minutes`);
-
-        } catch (eventError) {
-          logError(`GPT Pipeline: Error processing event ${i + 1}:`, eventError);
-          // Continue with next event
-        }
-      }
+      // Normalize into the app's event objects (shared with the Wind path).
+      const parsedEvents = normalizeParsedEvents(eventsData);
 
       if (parsedEvents.length === 0) {
         logError('GPT Pipeline: No valid events could be parsed');
@@ -311,6 +287,75 @@ export const extractAndParseEvent = async (imageUri, onProgress) => {
       throw err;
     }
     logError('GPT Pipeline: ✗ Critical error in extractAndParseEvent:', err.message);
+    throw ocrError(OCR_ERROR.INVALID, 'Something went wrong reading this poster.');
+  }
+};
+
+/**
+ * Wind (pay-as-you-go) scan pipeline. One multimodal call to /api/scan-wind does
+ * OCR + parsing at once, billed to the user's Wind wallet. Returns
+ * { events, wind } where `events` is the SAME array shape extractAndParseEvent
+ * returns (so the editor is identical) and `wind` is the billing receipt
+ * ({ user_charge_mc, ... }) for display. Throws an ocrError on failure; a dead
+ * connection surfaces as OCR_ERROR.WIND_RECONNECT so the UI can prompt a
+ * reconnect instead of a generic error.
+ */
+export const extractAndParseEventWind = async (imageUri, onProgress, { idempotencyKey } = {}) => {
+  const report = (stage) => {
+    try {
+      if (onProgress) onProgress(stage);
+    } catch (e) {
+      // progress reporting must never break the pipeline
+    }
+  };
+
+  try {
+    log('===== STARTING WIND SCAN (pay-as-you-go) =====');
+    if (!imageUri || typeof imageUri !== 'string') {
+      throw ocrError(OCR_ERROR.INVALID, 'Invalid image URI provided');
+    }
+
+    // Same preprocessing as the flat path: resize/compress, no crop.
+    report('analyzing');
+    const processedUri = await preprocessImage(imageUri);
+    const base64Image = await FileSystem.readAsStringAsync(processedUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    // Send the user's LOCAL date so relative dates resolve correctly.
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const localToday = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+
+    report('extracting');
+    log('Wind scan: calling /api/scan-wind...');
+    let data;
+    try {
+      data = await scanWithWind({ image: base64Image, today: localToday, idempotencyKey });
+    } catch (err) {
+      if (err?.code === 'wind_reconnect_required') {
+        throw ocrError(OCR_ERROR.WIND_RECONNECT, 'Your Wind connection expired. Reconnect to keep paying as you go.');
+      }
+      if (err?.windNetwork) {
+        throw ocrError(OCR_ERROR.NETWORK, 'Could not reach the server. Check your connection.');
+      }
+      if (err?.status === 422) {
+        throw ocrError(OCR_ERROR.NO_TEXT, "We couldn't find an event on this poster.");
+      }
+      throw ocrError(OCR_ERROR.SERVER, err?.message || 'The server could not process the image.');
+    }
+
+    report('organizing');
+    const parsedEvents = normalizeParsedEvents(Array.isArray(data.events) ? data.events : []);
+    if (parsedEvents.length === 0) {
+      throw ocrError(OCR_ERROR.NO_TEXT, "We couldn't find an event on this poster.");
+    }
+
+    log(`Wind scan: ✓ ${parsedEvents.length} event(s), charge ${data.wind?.user_charge_mc ?? '?'} mc`);
+    return { events: parsedEvents, wind: data.wind || null };
+  } catch (err) {
+    if (err && err.isOcrError) throw err;
+    logError('Wind scan: ✗ critical error:', err?.message);
     throw ocrError(OCR_ERROR.INVALID, 'Something went wrong reading this poster.');
   }
 };

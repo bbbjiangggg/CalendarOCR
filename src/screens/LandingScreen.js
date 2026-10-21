@@ -12,6 +12,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { Feather } from '@expo/vector-icons';
 import { useEvent } from '../context/EventContext';
 import { getRemainingScans, incrementScanCount, checkIsPro, syncReferralBonus } from '../utils/purchaseService';
+import { refreshWindStatus, isWindConnectedCached } from '../utils/windService';
 import TutorialOverlay from '../components/TutorialOverlay';
 import RedeemCodeModal from '../components/RedeemCodeModal';
 
@@ -21,6 +22,7 @@ export default function LandingScreen({ navigation }) {
   const { dispatch } = useEvent();
   const [remainingScans, setRemainingScans] = useState(-1);
   const [isPro, setIsPro] = useState(false);
+  const [windConnected, setWindConnected] = useState(false);
   const [showTutorial, setShowTutorial] = useState(false);
   const [showRedeem, setShowRedeem] = useState(false);
 
@@ -39,12 +41,16 @@ export default function LandingScreen({ navigation }) {
 
   const loadScanStatus = async () => {
     const proStatus = await checkIsPro();
+    // Show the cached Wind state immediately, then reconcile with the backend.
+    setWindConnected(await isWindConnectedCached());
     // Refresh referral bonus from the server first so the count reflects any
     // scans earned since last time (non-fatal if offline).
     await syncReferralBonus();
     const remaining = await getRemainingScans();
+    const { connected } = await refreshWindStatus();
     setIsPro(proStatus);
     setRemainingScans(remaining);
+    setWindConnected(connected);
   };
 
   const checkTutorialStatus = async () => {
@@ -171,7 +177,17 @@ export default function LandingScreen({ navigation }) {
             <Text style={styles.inviteText}>Invite friends, get free scans</Text>
           </TouchableOpacity>
 
-          {!isPro && remainingScans >= 0 && (
+          {isPro ? (
+            <Text style={styles.proStatusText}>✓ Pro · Unlimited scans</Text>
+          ) : windConnected ? (
+            <TouchableOpacity
+              style={styles.windStatusPill}
+              onPress={() => navigation.navigate('Upgrade', { remainingScans })}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.windStatusText}>⚡ Wind · Pay as you go</Text>
+            </TouchableOpacity>
+          ) : remainingScans >= 0 ? (
             <TouchableOpacity
               style={styles.proPrompt}
               onPress={() => navigation.navigate('Upgrade', { remainingScans })}
@@ -183,10 +199,7 @@ export default function LandingScreen({ navigation }) {
                   : `${remainingScans} free scan${remainingScans === 1 ? '' : 's'} left · Tap for Pro`}
               </Text>
             </TouchableOpacity>
-          )}
-          {isPro && (
-            <Text style={styles.proStatusText}>✓ Pro · Unlimited scans</Text>
-          )}
+          ) : null}
 
           {/* Referral: redeem a friend's code */}
           <TouchableOpacity onPress={() => setShowRedeem(true)} activeOpacity={0.7}>
@@ -338,6 +351,23 @@ const styles = StyleSheet.create({
     color: '#000000',
     textAlign: 'center',
     marginBottom: 12,
+    letterSpacing: -0.1,
+  },
+  windStatusPill: {
+    width: '100%',
+    alignItems: 'center',
+    backgroundColor: '#EAF7EC',
+    borderWidth: 1,
+    borderColor: '#C3E3C9',
+    paddingVertical: 14,
+    borderRadius: 14,
+    marginBottom: 16,
+  },
+  windStatusText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2F8F55',
+    textAlign: 'center',
     letterSpacing: -0.1,
   },
   footerText: {

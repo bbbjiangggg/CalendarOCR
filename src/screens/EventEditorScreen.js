@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,9 +16,10 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useEvent } from '../context/EventContext';
-import { extractAndParseEvent, OCR_ERROR } from '../utils/ocrService';
+import { extractAndParseEvent, extractAndParseEventWind, OCR_ERROR } from '../utils/ocrService';
 import { saveEventToCalendar } from '../utils/calendarService';
 import { incrementScanCount, getRemainingScans, markActivatedIfNeeded } from '../utils/purchaseService';
+import { isWindConnectedCached, newIdempotencyKey } from '../utils/windService';
 import { log, error as logError } from '../utils/logger';
 import SuccessAnimation from '../components/SuccessAnimation';
 import AnalyzingLoader from '../components/AnalyzingLoader';
@@ -33,12 +34,20 @@ export default function EventEditorScreen({ navigation }) {
   const [currentPage, setCurrentPage] = useState(0);
   const [processError, setProcessError] = useState(null);
   const [stage, setStage] = useState('analyzing'); // live OCR pipeline stage for the loader
+  const [scanMode, setScanMode] = useState('free'); // 'free' (flat/Pro) | 'wind' (pay-as-you-go)
+  const [windCharge, setWindCharge] = useState(null); // user_charge_mc for the last Wind scan
+  // Reused across retries of the SAME image so a re-run never double-charges the
+  // user's Wind wallet (the gateway dedupes on this idempotency key).
+  const idemKeyRef = useRef(null);
   // Success celebration overlay. `success.next` runs after the animation finishes.
   const [success, setSuccess] = useState(null); // { mode, title, next }
 
   useEffect(() => {
     if (state.capturedImage) {
       log('New image detected, processing...');
+      // Fresh idempotency key per captured image; retries of this same image
+      // reuse it (the effect doesn't re-run) so a Wind scan can't double-charge.
+      idemKeyRef.current = newIdempotencyKey();
       processImage();
     }
     
@@ -82,19 +91,36 @@ export default function EventEditorScreen({ navigation }) {
         throw Object.assign(new Error('No image was captured.'), { type: OCR_ERROR.INVALID });
       }
 
+      // Pay-as-you-go via Wind when the device has a live connection; otherwise
+      // the existing flat (free/Pro) path. The branch reads a locally-cached
+      // flag, so there's no extra round-trip before each scan.
+      const useWind = await isWindConnectedCached();
+      setScanMode(useWind ? 'wind' : 'free');
+      setWindCharge(null);
+
       // Race the pipeline against a timeout so a stalled request can't hang the UI.
-      const parsedEvents = await Promise.race([
-        extractAndParseEvent(uri, setStage),
-        new Promise((_, reject) =>
-          setTimeout(
-            () => reject(Object.assign(
-              new Error('This is taking longer than expected. Please try again.'),
-              { type: OCR_ERROR.NETWORK }
-            )),
-            25000
-          )
+      const timeout = new Promise((_, reject) =>
+        setTimeout(
+          () => reject(Object.assign(
+            new Error('This is taking longer than expected. Please try again.'),
+            { type: OCR_ERROR.NETWORK }
+          )),
+          25000
         )
-      ]);
+      );
+
+      let parsedEvents;
+      if (useWind) {
+        if (!idemKeyRef.current) idemKeyRef.current = newIdempotencyKey();
+        const res = await Promise.race([
+          extractAndParseEventWind(uri, setStage, { idempotencyKey: idemKeyRef.current }),
+          timeout,
+        ]);
+        parsedEvents = res.events;
+        setWindCharge(res.wind?.user_charge_mc ?? null);
+      } else {
+        parsedEvents = await Promise.race([extractAndParseEvent(uri, setStage), timeout]);
+      }
       log('Event extraction completed');
 
       if (!Array.isArray(parsedEvents) || parsedEvents.length === 0) {
@@ -220,6 +246,14 @@ export default function EventEditorScreen({ navigation }) {
     });
   };
 
+  // user_charge_mc is micro-cents ($1 = 100,000,000 mc). A scan costs a fraction
+  // of a cent, so anything under a cent shows as "<$0.01" instead of "$0.00".
+  const formatWindCharge = (mc) => {
+    if (mc == null) return null;
+    const usd = mc / 100000000;
+    return usd < 0.01 ? '<$0.01' : `$${usd.toFixed(2)}`;
+  };
+
   const handleSaveEvent = async () => {
     if (!currentEvent.title.trim()) {
       Alert.alert('Error', 'Please enter an event title');
@@ -229,15 +263,19 @@ export default function EventEditorScreen({ navigation }) {
     try {
       setIsSaving(true);
 
-      // Check scan limit before saving
-      const canSave = await incrementScanCount();
+      // Wind scans are pay-as-you-go — already billed to the user's wallet at
+      // scan time — so they don't draw on the free/Pro quota. The flat path
+      // keeps its existing save-time quota gate untouched.
+      if (scanMode !== 'wind') {
+        const canSave = await incrementScanCount();
 
-      if (!canSave) {
-        // User has reached scan limit - show upgrade screen
-        const remaining = await getRemainingScans();
-        setIsSaving(false);
-        navigation.navigate('Upgrade', { remainingScans: remaining });
-        return;
+        if (!canSave) {
+          // User has reached scan limit - show upgrade screen
+          const remaining = await getRemainingScans();
+          setIsSaving(false);
+          navigation.navigate('Upgrade', { remainingScans: remaining });
+          return;
+        }
       }
 
       // Save event to calendar
@@ -523,7 +561,10 @@ export default function EventEditorScreen({ navigation }) {
       [OCR_ERROR.SERVER]: { emoji: '🛠️', title: 'Server hiccup' },
       [OCR_ERROR.NO_TEXT]: { emoji: '🔍', title: 'No event found' },
       [OCR_ERROR.INVALID]: { emoji: '📷', title: "Couldn't read this poster" },
+      [OCR_ERROR.WIND_RECONNECT]: { emoji: '🔌', title: 'Reconnect Wind' },
     }[processError.type] || { emoji: '📷', title: "Couldn't read this poster" };
+
+    const isReconnect = processError.type === OCR_ERROR.WIND_RECONNECT;
 
     return (
       <View style={styles.errorContainer}>
@@ -534,10 +575,10 @@ export default function EventEditorScreen({ navigation }) {
         <View style={styles.errorActions}>
           <TouchableOpacity
             style={styles.errorPrimaryButton}
-            onPress={handleRetry}
+            onPress={isReconnect ? () => navigation.navigate('Upgrade', {}) : handleRetry}
             activeOpacity={0.8}
           >
-            <Text style={styles.errorPrimaryText}>Try Again</Text>
+            <Text style={styles.errorPrimaryText}>{isReconnect ? 'Reconnect Wind' : 'Try Again'}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -583,6 +624,16 @@ export default function EventEditorScreen({ navigation }) {
         
         <View style={styles.spacer} />
       </View>
+
+      {/* Wind pay-as-you-go receipt (only after a Wind-billed scan) */}
+      {scanMode === 'wind' && windCharge != null && (
+        <View style={styles.windBanner}>
+          <Feather name="wind" size={13} color="#4FA863" style={styles.windBannerIcon} />
+          <Text style={styles.windBannerText}>
+            {formatWindCharge(windCharge)} · billed to your Wind wallet
+          </Text>
+        </View>
+      )}
 
       {/* Cards Container */}
       <ScrollView
@@ -826,6 +877,28 @@ const styles = StyleSheet.create({
     color: '#6B6B6B',
     textAlign: 'center',
     marginTop: 2,
+    letterSpacing: -0.2,
+  },
+  windBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    backgroundColor: '#EAF7EC',
+    borderWidth: 1,
+    borderColor: '#C3E3C9',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    marginBottom: 10,
+  },
+  windBannerIcon: {
+    marginRight: 6,
+  },
+  windBannerText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2F8F55',
     letterSpacing: -0.2,
   },
   cardsContainer: {
