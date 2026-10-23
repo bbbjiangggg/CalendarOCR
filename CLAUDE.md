@@ -58,8 +58,60 @@ dot indicators + "X of N events"); each card saved individually.
 - RN 0.76 bundles **fmt 11.0.2 which fails to compile on Xcode 26** (consteval). Fixed via
   `ios/Podfile` `post_install` patch forcing `FMT_USE_CONSTEVAL=0`. Do NOT remove until
   upgrading RN ≥ 0.83 / Expo SDK ≥ 56.
+- **Pod deployment target:** newer Xcode 26 images treat a too-low
+  `IPHONEOS_DEPLOYMENT_TARGET` (SDWebImage / `*_resources` bundles default to 9.0) as a
+  hard error. `ios/Podfile` `post_install` forces every pod target + resource bundle to
+  the project min (15.1).
 - Not Expo Go compatible (react-native-iap + dev-client). Ad-hoc `preview` builds hit
   device-registration/"integrity" issues → use TestFlight.
+
+## Share Extension (screenshot / album → CalendarOCR)
+Second native iOS target **`ShareExtension`** (`ios/ShareExtension/`, Swift) so the app
+shows in the system share sheet's app row for images (screenshots, Photos).
+- **Flow:** extension saves the shared image to App Group container
+  `group.com.bowenjiang.CalendarOCR` as `pending-share.jpg`, best-effort foregrounds the
+  app, then the app picks it up and runs the **existing** OCR pipeline (OCR + paywall all
+  reused — no logic duplicated).
+- **Why not hand the image in via deep link?** iOS blocks extensions from launching the
+  host app: `extensionContext.open` returns false for share extensions, and the
+  responder-chain `openURL:` hack is force-failed on iOS 18+. So correctness does NOT
+  depend on the open succeeding — the app reads the pending file on its next activation.
+- **Pickup:** native module `ios/CalendarOCR/PendingShare.m`
+  (`NativeModules.PendingShare.consume()`) copies the App Group file into app cache,
+  deletes the original (one-shot), returns the path. `App.js` `<ShareIntentHandler>`
+  calls it on mount + every AppState `active`, then dispatches `SET_IMAGE` + navigates to
+  EventEditor. No-op (silent) when nothing is pending, so the camera flow is untouched.
+- Activation rule: images only (`NSExtensionActivationSupportsImageWithMaxCount`), no
+  storyboard (principal-class `ShareViewController`, UI-less).
+
+### Share Extension gotchas (each cost real build cycles — don't relearn)
+- **App Group entitlement is THE one that bites.** The extension target MUST have
+  `CODE_SIGN_ENTITLEMENTS = ShareExtension/ShareExtension.entitlements` in
+  `project.pbxproj`. Adding "App Groups" via Xcode's Signing & Capabilities UI did NOT
+  persist the build setting → extension signed with no App Group → `containerURL(...)`
+  returned nil → file never written → `consume()` always null. Both app AND extension
+  need the group in their entitlements files; EAS syncs capabilities to the App IDs/
+  profiles FROM those files, so if `CODE_SIGN_ENTITLEMENTS` is unset it silently never
+  registers them. Verify a build:
+  `codesign -d --entitlements :- Payload/CalendarOCR.app/PlugIns/ShareExtension.appex`
+- **Deployment target:** Xcode creates the target at the newest SDK (iOS 27) → it won't
+  appear in the share sheet on older-iOS devices. Set ShareExtension
+  `IPHONEOS_DEPLOYMENT_TARGET` to 17.6 (dropdown min) / match the app.
+- **Version match:** App Store rejects if extension `CFBundleVersion` ≠ app's. EAS
+  `autoIncrement` only bumps the main target and the extension uses
+  `GENERATE_INFOPLIST_FILE`. Fixed by a Run Script build phase on the **CalendarOCR**
+  target ("Sync Extension Version") that stamps every embedded `*.appex` Info.plist with
+  the host's version/build at archive time.
+- **Native module membership:** `PendingShare.m` must belong to the **CalendarOCR app**
+  target, not the extension.
+- **Submit config:** `eas.json` `submit.production.ios.ascAppId` must be the real ASC app
+  id **6754291511** (was wrong once → "app not found" on submit).
+- Inspecting a cloud build locally: `.ipa` is a zip — `unzip` it and `codesign`/`plutil`
+  the embedded `.appex` to check entitlements / `MinimumOSVersion` / versions without a
+  device.
+- Not worth doing (considered): an Action Extension (`com.apple.ui-services`) to also sit
+  in the share sheet's bottom action list — it's a whole second target + signing surface
+  for a less-discoverable spot. The app row is the primary placement.
 
 ## Tests
 `npm test` (jest). 30 tests in `__tests__/eventParsing.test.js` (parseTime AM/PM,
@@ -79,12 +131,16 @@ it auto-restores on launch (`checkPurchaseStatus` → `getAvailablePurchases`) +
 restore works fine; flag is technically spoofable (paywall intentionally not hardened yet).
 
 ## Current state
-- Version **1.1.6** (marketing). Backend deployed + verified (auth on, multi-event parsing
-  confirmed live). App committed & green; ship via the TestFlight command above.
-- Session delivered: logging gate, crop removal, backend auth + smarter parsing, typed OCR
-  errors + retry UI, calendar cache fix, regex location fallback, 30 tests, keyboard
-  dismissal, confetti success animation, pink progress loader, Airbnb-style card redesign,
-  fade-to-home (no card flash).
+- Version **1.2.0** (marketing). Backend deployed + verified. Share Extension live &
+  working on TestFlight (share a screenshot/photo → app opens → parses). To publish:
+  App Store Connect → create 1.2.0 version → attach the build → "What's New" → submit for
+  review (export compliance already declared via `ITSAppUsesNonExemptEncryption=false`).
+- Latest session: Share Extension (screenshot/album → CalendarOCR) + its native pickup
+  module, version-sync build phase, Podfile deployment-target patch, `ascAppId` fix.
+- Earlier: logging gate, crop removal, backend auth + smarter parsing, typed OCR errors +
+  retry UI, calendar cache fix, regex location fallback, tests, keyboard dismissal,
+  confetti success animation, pink progress loader, Airbnb-style card redesign,
+  fade-to-home, referral system, Wind pay-as-you-go.
 
 ## Possible follow-ups (not done)
 - Harden paywall with server-side receipt validation.
