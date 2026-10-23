@@ -10,7 +10,8 @@ import {
   ActivityIndicator,
   Dimensions,
   Platform,
-  Keyboard
+  Keyboard,
+  Linking
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Feather } from '@expo/vector-icons';
@@ -18,6 +19,7 @@ import * as Haptics from 'expo-haptics';
 import { useEvent } from '../context/EventContext';
 import { extractAndParseEvent, extractAndParseEventWind, OCR_ERROR } from '../utils/ocrService';
 import { saveEventToCalendar } from '../utils/calendarService';
+import { recordSaveAndMaybeReview } from '../utils/review';
 import { incrementScanCount, getRemainingScans, markActivatedIfNeeded } from '../utils/purchaseService';
 import { isWindConnectedCached, newIdempotencyKey } from '../utils/windService';
 import { log, error as logError } from '../utils/logger';
@@ -161,6 +163,10 @@ export default function EventEditorScreen({ navigation }) {
       // fade transition carries the opaque overlay out to Landing, so the card
       // never flashes. Don't clear `success` here; it unmounts with the screen.
       if (cfg.next) cfg.next();
+      // After the celebration + fade home, record this completed save and maybe
+      // ask for an App Store review (milestone + cool-down gated inside). Delay
+      // so the native dialog lands on a settled Landing screen, not mid-fade.
+      setTimeout(() => { recordSaveAndMaybeReview(); }, 900);
     } else {
       // 'brief': overlay has already faded out to reveal the next card.
       setSuccess(null);
@@ -319,7 +325,19 @@ export default function EventEditorScreen({ navigation }) {
       }
     } catch (error) {
       logError('Save error:', error);
-      Alert.alert('Error', 'Failed to save event to calendar');
+      if (error?.code === 'PERMISSION') {
+        Alert.alert(
+          'Calendar Access Needed',
+          error.message,
+          [
+            { text: 'Not Now', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ]
+        );
+      } else {
+        // Surface the real reason so a failure is actionable, not a dead end.
+        Alert.alert('Couldn’t Save', error?.message || 'Failed to save event to calendar.');
+      }
     } finally {
       setIsSaving(false);
     }

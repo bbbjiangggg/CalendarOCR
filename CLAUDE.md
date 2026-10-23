@@ -123,6 +123,16 @@ duration, time ranges, dates, location). Babel: `babel.config.js` (`babel-preset
 - Icons: `@expo/vector-icons` (Feather) — no new native dep. Theme pink: card `#FFF0F0`,
   accent `#FF6B6B`, bg `#FAFAFA`.
 - Reduce Motion respected in animations.
+- **Calendar needs iOS 17+ Full Access.** The app creates/enumerates its own
+  "CalendarOCR" calendar → requires `NSCalendarsFullAccessUsageDescription` and FULL
+  (not write-only) access. expo-calendar 14 reports anything short of full as
+  not-granted, so `calendarService.saveEventToCalendar` throws a typed `PERMISSION`
+  error and EventEditor surfaces an actionable "Open Settings" alert.
+- **Ratings prompt:** `src/utils/review.js` `recordSaveAndMaybeReview()` fires Apple's
+  native `expo-store-review` prompt after a completed save (called from
+  `handleSuccessComplete` 'full', delayed). Gated: milestones `[1,5,15]` completed
+  saves, 45-day cool-down, max 3 ever, counters in AsyncStorage, attempt recorded
+  before prompting. Never shows in dev/TestFlight — only live App Store builds.
 
 ## IAP / Pro recovery
 One-time non-consumable (`com.bowenjiang.calendarocr.pro`), tied to Apple ID. On reinstall

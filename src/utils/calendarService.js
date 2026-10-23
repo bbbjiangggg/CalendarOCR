@@ -124,10 +124,19 @@ export const findOrCreateCalendarOCRCalendar = async () => {
 
 export const saveEventToCalendar = async (eventData) => {
   try {
-    // Request permissions first
+    // Request permissions first. Note: iOS 17+ splits calendar access into
+    // full vs write-only; this app needs FULL access (it creates/enumerates its
+    // own "CalendarOCR" calendar). expo-calendar reports anything short of full
+    // access as not-granted, so when this fails the fix is almost always to turn
+    // on Full Access in Settings — surface that as an actionable, typed error.
     const hasPermission = await requestCalendarPermissions();
     if (!hasPermission) {
-      throw new Error('Calendar permission denied');
+      const err = new Error(
+        'CalendarOCR needs Full Access to your calendar to save events. ' +
+        'Turn it on in Settings → CalendarOCR → Calendars → Full Access.'
+      );
+      err.code = 'PERMISSION';
+      throw err;
     }
 
     // Get or create the CalendarOCR calendar
