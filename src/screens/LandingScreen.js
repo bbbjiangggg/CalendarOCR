@@ -185,7 +185,7 @@ export default function LandingScreen({ navigation }) {
               onPress={() => navigation.navigate('Upgrade', { remainingScans })}
               activeOpacity={0.8}
             >
-              <Text style={styles.windStatusText}>⚡ Wind · Pay as you go</Text>
+              <Text style={styles.windStatusText}>Wind · Pay as you go</Text>
             </TouchableOpacity>
           ) : remainingScans >= 0 ? (
             <TouchableOpacity

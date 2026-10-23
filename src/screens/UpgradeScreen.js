@@ -11,6 +11,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import AppModal from '../components/AppModal';
 import { purchasePro, restorePurchases } from '../utils/purchaseService';
 import {
   connectWind,
@@ -24,6 +25,8 @@ export default function UpgradeScreen({ navigation, route }) {
   const [isRestoring, setIsRestoring] = useState(false);
   const [windConnected, setWindConnected] = useState(false);
   const [windBusy, setWindBusy] = useState(false);
+  const [showConnected, setShowConnected] = useState(false);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
 
   const { remainingScans = 0 } = route.params || {};
 
@@ -46,11 +49,7 @@ export default function UpgradeScreen({ navigation, route }) {
       const res = await connectWind();
       if (res.ok) {
         setWindConnected(true);
-        Alert.alert(
-          'Connected to Wind ⚡',
-          'Scans are now billed to your Wind wallet — no monthly limit. You can disconnect anytime.',
-          [{ text: 'Start Scanning', onPress: () => navigation.goBack() }]
-        );
+        setShowConnected(true);
       }
       // res.canceled → user dismissed the sheet; stay put silently.
     } catch (err) {
@@ -60,29 +59,19 @@ export default function UpgradeScreen({ navigation, route }) {
     }
   };
 
-  const handleDisconnectWind = () => {
-    Alert.alert(
-      'Disconnect Wind?',
-      'Scans will go back to your free monthly scans (or Pro). You can reconnect anytime.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Disconnect',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setWindBusy(true);
-              await disconnectWind();
-              setWindConnected(false);
-            } catch (err) {
-              Alert.alert('Error', 'Could not disconnect. Please try again.');
-            } finally {
-              setWindBusy(false);
-            }
-          },
-        },
-      ]
-    );
+  const handleDisconnectWind = () => setShowDisconnectConfirm(true);
+
+  const doDisconnect = async () => {
+    setShowDisconnectConfirm(false);
+    try {
+      setWindBusy(true);
+      await disconnectWind();
+      setWindConnected(false);
+    } catch (err) {
+      Alert.alert('Error', 'Could not disconnect. Please try again.');
+    } finally {
+      setWindBusy(false);
+    }
   };
 
   // Responsive design: detect screen size
@@ -248,7 +237,7 @@ export default function UpgradeScreen({ navigation, route }) {
 
         {/* Connect with Wind — pay as you go */}
         <View style={styles.windCard}>
-          <Text style={styles.windTitle}>⚡ Pay as you go</Text>
+          <Text style={styles.windTitle}>Pay as you go</Text>
           <Text style={styles.windSubtitle}>
             Connect your Wind wallet and pay only for what you scan — billed at
             cost, no subscription, no commitment.
@@ -297,6 +286,37 @@ export default function UpgradeScreen({ navigation, route }) {
           <Text style={styles.footer}>Apple In-App Purchase</Text>
         </View>
       </ScrollView>
+
+      <AppModal
+        visible={showConnected}
+        onRequestClose={() => setShowConnected(false)}
+        icon="wind"
+        iconColor="#16A34A"
+        iconBg="#E7F7EE"
+        title="Connected to Wind"
+        message="Scans are now billed to your Wind wallet — no monthly limit. You can disconnect anytime."
+        buttons={[
+          {
+            label: 'Start Scanning',
+            style: 'primary',
+            onPress: () => { setShowConnected(false); navigation.goBack(); },
+          },
+        ]}
+      />
+
+      <AppModal
+        visible={showDisconnectConfirm}
+        onRequestClose={() => setShowDisconnectConfirm(false)}
+        icon="wind"
+        iconColor="#8A8A8E"
+        iconBg="#F1F1F3"
+        title="Disconnect Wind?"
+        message="Scans will go back to your free monthly scans (or Pro). You can reconnect anytime."
+        buttons={[
+          { label: 'Disconnect', style: 'destructive', onPress: doDisconnect },
+          { label: 'Not Now', style: 'secondary', onPress: () => setShowDisconnectConfirm(false) },
+        ]}
+      />
     </SafeAreaView>
   );
 }
@@ -506,16 +526,16 @@ const styles = StyleSheet.create({
   },
   windConnectButton: {
     width: '100%',
-    backgroundColor: '#6BBE78',
+    backgroundColor: '#16A34A',
     paddingVertical: 16,
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#4C9A5A',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-    elevation: 3,
+    shadowColor: '#0E7C38',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
   windConnectInner: {
     flexDirection: 'row',
